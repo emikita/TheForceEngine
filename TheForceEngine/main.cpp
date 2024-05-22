@@ -995,5 +995,13 @@ void parseOption(const char* name, const std::vector<const char*>& values, bool 
 		{
 			TFE_Settings::getTempSettings()->skipLoadDelay = true;
 		}
+		else if (strcasecmp(name, "load") == 0)
+		{
+			const char* fileName = values.size() >= 1 ? values[0] : nullptr;
+			if (fileName)
+			{
+				TFE_SaveSystem::postLoadRequest(fileName);
+			}
+		}
 	}
 }
