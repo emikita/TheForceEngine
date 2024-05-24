@@ -58,12 +58,30 @@ struct Vec2i
 	};
 };
 
+struct Vec2ui
+{
+	union
+	{
+		struct { u32 x, z; };
+		u32 m[2];
+	};
+};
+
 struct Vec3i
 {
 	union
 	{
 		struct { s32 x, y, z; };
 		s32 m[3];
+	};
+};
+
+struct Vec3ui
+{
+	union
+	{
+		struct { u32 x, y, z; };
+		u32 m[3];
 	};
 };
 

@@ -1003,5 +1003,9 @@ void parseOption(const char* name, const std::vector<const char*>& values, bool 
 				TFE_SaveSystem::postLoadRequest(fileName);
 			}
 		}
+		else if (strcasecmp(name, "vr") == 0)
+		{
+			TFE_Settings::getTempSettings()->vr = true;
+		}
 	}
 }

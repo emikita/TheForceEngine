@@ -206,6 +206,9 @@
     <Filter Include="Source\TFE_Editor\LevelEditor\Scripting">
       <UniqueIdentifier>{edd9ea1a-0570-4524-a9d7-f703a2c09cad}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source\VR">
+      <UniqueIdentifier>{7855132b-d7b1-4ddc-af98-53136dd6944c}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="main.h">
@@ -1342,6 +1345,15 @@
     <ClInclude Include="TFE_System\cJSON.h">
       <Filter>Source\TFE_System</Filter>
     </ClInclude>
+    <ClInclude Include="VR\VR.h">
+      <Filter>Source\VR</Filter>
+    </ClInclude>
+    <ClInclude Include="VR\OpenXRDebug.h">
+      <Filter>Source\VR</Filter>
+    </ClInclude>
+    <ClInclude Include="VR\OpenGLDebug.h">
+      <Filter>Source\VR</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -2309,6 +2321,15 @@
     </ClCompile>
     <ClCompile Include="TFE_System\cJSON.c">
       <Filter>Source\TFE_System</Filter>
+    </ClCompile>
+    <ClCompile Include="VR\OpenXR.cpp">
+      <Filter>Source\VR</Filter>
+    </ClCompile>
+    <ClCompile Include="VR\OpenXRDebug.cpp">
+      <Filter>Source\VR</Filter>
+    </ClCompile>
+    <ClCompile Include="VR\OpenGLDebug.cpp">
+      <Filter>Source\VR</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

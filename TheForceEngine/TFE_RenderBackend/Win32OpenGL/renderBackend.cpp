@@ -11,6 +11,7 @@
 #include <TFE_PostProcess/bloomDownsample.h>
 #include <TFE_PostProcess/bloomMerge.h>
 #include <TFE_PostProcess/postprocess.h>
+#include <VR/VR.h>
 #include "renderTarget.h"
 #include "screenCapture.h"
 #include <SDL.h>
@@ -497,6 +498,15 @@ namespace TFE_RenderBackend
 			s_virtualRenderTarget = new RenderTarget();
 			s_virtualRenderTexture = new TextureGpu();
 			result = s_virtualRenderTexture->create(s_virtualWidth, s_virtualHeight);
+
+			const bool vr = TFE_Settings::getTempSettings()->vr;
+			if (vr)
+			{
+				if (!vr::IsInitialized())
+				{
+					vr::Initialize(vr::Gfx::OpenGL);
+				}
+			}
 
 			if (s_bloomEnable) // Output to two textures.
 			{
