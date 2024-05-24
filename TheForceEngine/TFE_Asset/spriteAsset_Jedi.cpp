@@ -711,14 +711,16 @@ namespace TFE_Sprite_Jedi
 		s_spriteNames[pool].clear();
 
 		const size_t hdWaxCount = s_hdSpriteList[pool].size();
-		HdWax** hdWaxList = s_hdSpriteList[pool].data();
-		for (size_t i = 0; i < waxCount; i++)
+		if (HdWax** hdWaxList = s_hdSpriteList[pool].data(); hdWaxList)
 		{
-			for (s32 e = 0; e < hdWaxList[i]->entryCount; e++)
+			for (size_t i = 0; i < waxCount; i++)
 			{
-				free(hdWaxList[i]->cells[e].data);
+				for (s32 e = 0; e < hdWaxList[i]->entryCount; e++)
+				{
+					free(hdWaxList[i]->cells[e].data);
+				}
+				free(hdWaxList[i]);
 			}
-			free(hdWaxList[i]);
 		}
 		s_hdSpriteList[pool].clear();
 		s_hdSprites[pool].clear();

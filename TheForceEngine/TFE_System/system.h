@@ -95,3 +95,13 @@ static inline void __strupr(char *c)
 		c++;
 	}
 }
+
+#define FMT_HEADER_ONLY
+#include "fmt/format.h"
+
+#define TFE_CRITICAL(tag, ...) TFE_System::logWrite(LOG_CRITICAL, tag, fmt::format(__VA_ARGS__).c_str())
+#define TFE_ERROR(tag, ...) TFE_System::logWrite(LOG_ERROR, tag, fmt::format(__VA_ARGS__).c_str())
+#define TFE_WARN(tag, ...) TFE_System::logWrite(LOG_WARNING, tag, fmt::format(__VA_ARGS__).c_str())
+#define TFE_INFO(tag, ...) TFE_System::logWrite(LOG_MSG, tag, fmt::format(__VA_ARGS__).c_str())
+
+#define TFE_ASSERT assert
