@@ -1351,8 +1351,11 @@
     <ClInclude Include="VR\OpenXRDebug.h">
       <Filter>Source\VR</Filter>
     </ClInclude>
-    <ClInclude Include="VR\OpenGLDebug.h">
-      <Filter>Source\VR</Filter>
+    <ClInclude Include="Shaders\vr.h">
+      <Filter>Source\Shaders</Filter>
+    </ClInclude>
+    <ClInclude Include="TFE_RenderBackend\Win32OpenGL\openGL_Debug.h">
+      <Filter>Source\TFE_RenderBackend\Win32OpenGL</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -2328,8 +2331,8 @@
     <ClCompile Include="VR\OpenXRDebug.cpp">
       <Filter>Source\VR</Filter>
     </ClCompile>
-    <ClCompile Include="VR\OpenGLDebug.cpp">
-      <Filter>Source\VR</Filter>
+    <ClCompile Include="TFE_RenderBackend\Win32OpenGL\openGL_Debug.cpp">
+      <Filter>Source\TFE_RenderBackend\Win32OpenGL</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

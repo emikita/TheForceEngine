@@ -1,6 +1,7 @@
 #include "glslParser.h"
 #include <TFE_RenderBackend/shader.h>
 #include <TFE_RenderBackend/vertexBuffer.h>
+#include <TFE_RenderBackend/Win32OpenGL/openGL_Debug.h>
 #include <TFE_System/system.h>
 #include <TFE_FileSystem/filestream.h>
 #include <TFE_FileSystem/paths.h>
@@ -123,6 +124,11 @@ bool Shader::load(const char* vertexShaderFile, const char* fragmentShaderFile, 
 
 	// Build a string of defines.
 	ShaderGL::s_defineString.clear();
+
+	// first add shader files so we can see it in NSight/RenderDoc
+	ShaderGL::s_defineString += fmt::format("\r\n// vs: \"{}\"\r\n", vertexShaderFile);
+	ShaderGL::s_defineString += fmt::format("// fs: \"{}\"\r\n", fragmentShaderFile);
+
 	if (defineCount)
 	{
 		ShaderGL::s_defineString += "\r\n";
@@ -242,6 +248,8 @@ void Shader::setVariable(s32 id, ShaderVariableType type, const f32* data)
 		TFE_System::logWrite(LOG_ERROR, "Shader", "Mismatched parameter type.");
 		assert(0);
 	}
+
+	TFE_ASSERT_GL;
 }
 
 void Shader::setVariableArray(s32 id, ShaderVariableType type, const f32* data, u32 count)
@@ -275,6 +283,8 @@ void Shader::setVariableArray(s32 id, ShaderVariableType type, const f32* data, 
 		TFE_System::logWrite(LOG_ERROR, "Shader", "Mismatched parameter type.");
 		assert(0);
 	}
+
+	TFE_ASSERT_GL;
 }
 
 void Shader::setVariable(s32 id, ShaderVariableType type, const s32* data)
@@ -299,6 +309,8 @@ void Shader::setVariable(s32 id, ShaderVariableType type, const s32* data)
 		TFE_System::logWrite(LOG_ERROR, "Shader", "Mismatched parameter type.");
 		assert(0);
 	}
+
+	TFE_ASSERT_GL;
 }
 
 void Shader::setVariable(s32 id, ShaderVariableType type, const u32* data)
@@ -323,4 +335,6 @@ void Shader::setVariable(s32 id, ShaderVariableType type, const u32* data)
 		TFE_System::logWrite(LOG_ERROR, "Shader", "Mismatched parameter type.");
 		assert(0);
 	}
+
+	TFE_ASSERT_GL;
 }

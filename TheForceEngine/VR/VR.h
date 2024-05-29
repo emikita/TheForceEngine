@@ -5,7 +5,7 @@
 
 namespace vr
 {
-	enum class Gfx : uint32_t
+	enum Gfx
 	{
 		OpenGL,
 		Vulkan
@@ -21,17 +21,17 @@ namespace vr
 	struct Pose
 	{
 		//quat	mRotation;
-		Vec3f	mPosition;
+		//Vec3f	mPosition;
 		Mat4	mTransformation;// { ae::core::mat4::GetIdentity() };
 		//quat	mRotationLocal;
-		Vec3f	mPositionLocal;
-		Mat4	mTransformationLocal;// { ae::core::mat4::GetIdentity() };
+		//Vec3f	mPositionLocal;
+		//Mat4	mTransformationLocal;// { ae::core::mat4::GetIdentity() };
 		Vec3f	mVelocity;			// velocity in tracker space in m/s
 		Vec3f	mAngularVelocity;	// angular velocity in radians/s (?)
 		bool	mIsValid{ false };
 	};
 
-	enum class ControllerButtons : uint32_t
+	enum ControllerButtons
 	{
 		A = 1 << 0, // X
 		B = 1 << 1, // Y
@@ -40,10 +40,19 @@ namespace vr
 		Shoulder = 1 << 4,
 	};
 
-	enum class Feature : uint32_t
+	enum Feature
 	{
 		EyeTracking = 1 << 0,
 		Passthrough = 1 << 1
+	};
+
+	enum class UpdateStatus
+	{
+		Ok,
+		ShouldQuit,
+		ShouldDestroy,
+		ShouldNotRender,
+		NotVisible
 	};
 
 	struct ControllerState
@@ -55,17 +64,26 @@ namespace vr
 		Vec2f		mTrackpad{ 0.0f, 0.0f };
 	};
 
+	struct HapticVibration
+	{
+		float mDuration;	// seconds, < 0.0f = minimal
+		float mFrequency;	// Hz, 0.0f = unspecified
+		float mAmplitude;	// [0.0f, 1.0f]
+	};
 
 	bool Initialize(Gfx gfx);
 	bool IsInitialized();
 	void Deinitialize();
+
+	void ClearRenderTarget(Side eye);
 	//const Vec2ui& GetTargetSize() const{ return mTargetSize; }
-	//bool UseMultiView() const;
+	bool UseMultiView();
 	bool IsFeatureSupported(Feature feature);
 
-	//UpdateStatus UpdateFrame(const Camera& camera, float userScale);
-	//bool UpdateView(uint32_t viewIndex);
-	//bool SubmitFrame();
+	UpdateStatus UpdateFrame(const Mat3& cameraRotOrig, const Vec3f& cameraPosOrig, const Mat4& projOrig, float userScale);
+	void UpdateView(Side eye);
+	void Commit(Side eye);
+	bool SubmitFrame();
 
 	//const Mat4& GetEyeProj(int eye);
 	//const Mat4& GetEyeLtw(int eye);
@@ -83,7 +101,7 @@ namespace vr
 	//RenderTarget* GetCurrentTarget(int eye);
 	//void Commit(int eye);
 
-	bool CreateTextureSwapChain(const Vec2ui& size);
-	int GetTextureSwapChainLength();
-	void DestroySwapChain();
+	//bool CreateSwapChain(const Vec2ui& size);
+	//size_t GetTextureSwapChainLength();
+	//void DestroySwapChain();
 }

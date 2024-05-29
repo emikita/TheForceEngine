@@ -1,11 +1,32 @@
 #include "VR.h"
-#include "OpenGLDebug.h"
 #include <TFE_System/system.h>
+#include <TFE_RenderBackend/renderState.h>
+#include <TFE_RenderBackend/Win32OpenGL/openGL_Debug.h>
 #include <glew/include/GL/glew.h>
 #include <vector>
 #include <array>
 #include <string>
 #include <unordered_map>
+#include <algorithm>
+
+//#define GLM_GTX_matrix_major_storage
+//#define GLM_FORCE_NO_CTOR_INIT
+//#include <glm/vec3.hpp> // glm::vec3
+//#include <glm/vec4.hpp> // glm::vec4
+//#include <glm/mat4x4.hpp> // glm::mat4
+//#include <glm/ext/matrix_transform.hpp> // glm::translate, glm::rotate, glm::scale
+//#include <glm/ext/matrix_clip_space.hpp> // glm::perspective
+//#include <glm/ext/scalar_constants.hpp> // glm::pi
+//
+////#include <glm/glm.hpp>
+//#include <glm/gtc/type_ptr.hpp>
+////#include <glm/gtc/quaternion.hpp>
+//#define GLM_ENABLE_EXPERIMENTAL
+////#include <glm/gtx/euler_angles.hpp>
+////#include <glm/gtx/quaternion.hpp>
+////#include <glm/gtx/quaternion.hpp>
+//#include <glm/gtx/matrix_major_storage.hpp>
+
 
 #if defined(_WIN32)
 #define NOMINMAX
@@ -36,18 +57,47 @@ struct IUnknown;
 #define strcpy_s(dest, source) strncpy((dest), (source), sizeof(dest))
 #endif
 
-namespace
+static_assert(sizeof(Mat4) == sizeof(XrMatrix4x4f));
+
+namespace vr
 {
-//namespace vr
-//{
+	// conversion function between TFE math types & OpenXR math types
+
+	XrMatrix4x4f XrMatrix4x4f_CreateFromTFE(const Mat4& mat)
+	{
+		XrMatrix4x4f result;
+		std::memcpy(result.m, mat.data, sizeof(result.m));
+		return result;
+	}
+
+	XrMatrix4x4f XrMatrix4x4f_CreateFromTFE(const Mat3& mat, const Vec3f& pos)
+	{
+		XrMatrix4x4f result =
+		{
+			mat.m0.x, mat.m0.y, mat.m0.z, 0.0f,
+			mat.m1.x, mat.m1.y, mat.m1.z, 0.0f,
+			mat.m2.x, mat.m2.y, mat.m2.z, 0.0f,
+			pos.x, pos.y, pos.z, 1.0f
+		};
+		return result;
+	}
+
+	Mat4 Mat4_CreateFromXr(const XrMatrix4x4f& mat)
+	{
+		Mat4 result;
+		std::memcpy(result.data, mat.m, sizeof(result.m));
+		return result;
+	}
+
+	using GLuintPair = std::pair<GLuint, GLuint>;
+
 	bool												mInitialized{ false };
 	vr::Gfx												mGfx;
-	bool												mEyeTrackingSupported{ false };
 	bool												mPassthroughSupported{ false };
 	bool												mHeadsetIdDetectionSupported{ false };
 	bool												mHeadsetIdDetectionSupportedMeta{ false };
-	Vec3ui			 									mTargetSize{ 0, 0 };
-	uint32_t											mSwapChainLength{ 0 };
+	Vec2ui			 									mTargetSize{ 0, 0 };
+	size_t												mSwapChainLength{ 0 };
 	GLenum												mSwapchainFormat;
 	const std::vector<GLenum>							mRequestedSwapchainFormats =
 	{
@@ -62,8 +112,6 @@ namespace
 	bool												mRequestRestart{ false };
 	bool												mSessionRunning{ false };
 
-namespace openxr
-{
 	using namespace vr;
 	using namespace vr::openxr::detail;
 
@@ -84,23 +132,29 @@ namespace openxr
 
 	Pose												mEyeGazePose;
 
-	std::array<Mat4, Side::Count>						mProj;
+	std::array<Mat4, Side::Count>						mProjection;
+	//std::array<Mat4, Side::Count>						mEyeLtw;
 	std::array<Pose, Side::Count>						mEyePose;
 
 	float												mUserScale;
 
 	std::array<XrSwapchain, Side::Count>				mSwapchains{ nullptr };
-	//std::array<std::vector<Texture>, 2>				mColorTextures;
-	//std::array<std::vector<Texture>, 2>				mDepthTextures;
-	//std::array<std::vector<RenderTarget>, 2>			mRenderTargets;
+	std::array<std::vector<GLuintPair>, Side::Count>	mTextures; // color/depth, color is owned by OpenXR
+	//std::array<std::vector<TextureGpu*>, Side::Count>	mDepthTextures;
+	std::array<std::vector<GLuint>, Side::Count>		mRenderTargets;
 	uint32_t											mTextureSwapChainIndex{ 0 };
 
+	void OnError()
+	{
+		std::ignore = 5;
+	}
 #define CHECK_XR_RESULT(x)										\
 	{															\
 		XrResult xr_result;										\
 		if (XR_FAILED(xr_result = x))							\
 		{														\
 			TFE_ERROR("VR", "XR error: {}", GetResultStr(xr_result));	\
+			OnError();											\
 		}														\
 	}
 
@@ -110,6 +164,7 @@ namespace openxr
 		if (XR_FAILED(res = x))											\
 		{																\
 			TFE_ERROR("VR", "{} returns XR error: {}", #x, GetResultStr(res));	\
+			OnError();													\
 		}																\
 		else															\
 		{																\
@@ -468,12 +523,6 @@ namespace openxr
 			TFE_INFO("VR", "OpenXR '{}' extension is not supported.", XR_FB_PASSTHROUGH_EXTENSION_NAME);
 		}
 
-		mEyeTrackingSupported = false;// EnableExtensionIfSupported(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
-		if (!mEyeTrackingSupported)
-		{
-			TFE_INFO("VR", "OpenXR '{}' extension is not supported.", XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
-		}
-
 		//if (mHeadsetIdDetectionSupported = EnableExtensionIfSupported(XR_EXT_UUID_EXTENSION_NAME); mHeadsetIdDetectionSupported)
 		{
 			mHeadsetIdDetectionSupportedMeta = EnableExtensionIfSupported(XR_META_HEADSET_ID_EXTENSION_NAME);
@@ -564,11 +613,18 @@ namespace openxr
 	bool PrepareXrSystem()
 	{
 		XrSystemGetInfo getInfo{ XR_TYPE_SYSTEM_GET_INFO, nullptr, XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY };
+		XrResult res = xrGetSystem(mInstance, &getInfo, &systemId);
+		if (XR_FAILED(res))
+		{
+			TFE_ERROR("VR", "XR error: {}", GetResultStr(res));
+			return false;
+		}
+
 		CHECK_XR_RESULT2(xrGetSystem(mInstance, &getInfo, &systemId));
 
 		if (mGfx == vr::Gfx::OpenGL)
 		{
-			XrResult res = XR_SUCCESS;
+			res = XR_SUCCESS;
 #if defined(USE_GL_ES)
 			LOAD_XR_FUNCTION(res, mInstance, xrGetOpenGLESGraphicsRequirementsKHR);
 			XrGraphicsRequirementsOpenGLESKHR graphicsRequirements{ XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR };
@@ -658,7 +714,7 @@ namespace openxr
 		TFE_INFO("VR", "Requested swapchain formats (#{}):", requestedPixelFormats.size());
 		for (const auto& format : requestedPixelFormats)
 		{
-			TFE_INFO("VR", " {}", gl::GetConstStr(format));
+			TFE_INFO("VR", " {}", OpenGL_Debug::GetConstStr(format));
 		}
 
 		// query the runtime's preferred swapchain formats
@@ -671,7 +727,7 @@ namespace openxr
 		TFE_INFO("VR", "Supported swapchain formats (#{}):", swapchainFormats.size());
 		for (const auto& formatGL : swapchainFormats)
 		{
-			TFE_INFO("VR", " {}", gl::GetConstStr((GLenum)formatGL));
+			TFE_INFO("VR", " {}", OpenGL_Debug::GetConstStr((GLenum)formatGL));
 		}
 
 		// choose the first runtime-preferred format that this app supports
@@ -688,7 +744,7 @@ namespace openxr
 		};
 
 		const GLenum pixelFormat = SelectPixelFormat(requestedPixelFormats, swapchainFormats);
-		TFE_INFO("VR", "Selected swapchain format={}", gl::GetConstStr(pixelFormat));
+		TFE_INFO("VR", "Selected swapchain format={}", OpenGL_Debug::GetConstStr(pixelFormat));
 
 		return pixelFormat;
 	}
@@ -708,12 +764,6 @@ namespace openxr
 		{
 			XrSystemProperties systemProperties{ XR_TYPE_SYSTEM_PROPERTIES };
 
-			XrSystemEyeGazeInteractionPropertiesEXT eyeGazeInteractionProperties{ XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT };
-			if (mEyeTrackingSupported)
-			{
-				InsertExtensionStruct(systemProperties, eyeGazeInteractionProperties);
-			}
-
 			XrSystemHeadsetIdPropertiesMETA headsetIdProperties{ XR_TYPE_SYSTEM_HEADSET_ID_PROPERTIES_META };
 			if (mHeadsetIdDetectionSupportedMeta)
 			{
@@ -732,12 +782,6 @@ namespace openxr
 
 			if (mHeadsetIdDetectionSupportedMeta)
 			{
-			}
-
-			if (mEyeTrackingSupported && !eyeGazeInteractionProperties.supportsEyeGazeInteraction)
-			{
-				TFE_ERROR("VR", "extension '{}' supported but system properties reports no gaze interaction", XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
-				mEyeTrackingSupported = false;
 			}
 		}
 
@@ -867,17 +911,6 @@ namespace openxr
 			actionInfo.countSubactionPaths = uint32_t(g_input.handSubactionPath.size());
 			actionInfo.subactionPaths = g_input.handSubactionPath.data();
 			CHECK_XR_RESULT(xrCreateAction(g_input.actionSet, &actionInfo, &g_input.poseAction));
-
-			// Create an input action for eye gaze.
-			if (mEyeTrackingSupported)
-			{
-				actionInfo.actionType = XR_ACTION_TYPE_POSE_INPUT;
-				strcpy_s(actionInfo.actionName, "eye_gaze");
-				strcpy_s(actionInfo.localizedActionName, "Eye Gaze");
-				actionInfo.countSubactionPaths = 0;
-				actionInfo.subactionPaths = nullptr;// g_input.handSubactionPath.data();
-				CHECK_XR_RESULT(xrCreateAction(g_input.actionSet, &actionInfo, &g_input.eyeGazeAction));
-			}
 
 			// Create output actions for vibrating the left and right controller.
 			actionInfo.actionType = XR_ACTION_TYPE_VIBRATION_OUTPUT;
@@ -1186,23 +1219,6 @@ namespace openxr
 			CHECK_XR_RESULT(xrSuggestInteractionProfileBindings(mInstance, &suggestedBindings));
 		}
 
-		// Eye tracking interaction.
-		if (mEyeTrackingSupported)
-		{
-			XrPath eyeGazePath;
-			CHECK_XR_RESULT(xrStringToPath(mInstance, "/user/eyes_ext/input/gaze_ext/pose", &eyeGazePath));
-
-			XrPath eyeGazeInteractionProfilePath;
-			CHECK_XR_RESULT(xrStringToPath(mInstance, "/interaction_profiles/ext/eye_gaze_interaction", &eyeGazeInteractionProfilePath));
-
-			std::vector<XrActionSuggestedBinding> bindings{ {g_input.eyeGazeAction, eyeGazePath} };
-			XrInteractionProfileSuggestedBinding suggestedBindings{ XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
-			suggestedBindings.interactionProfile = eyeGazeInteractionProfilePath;
-			suggestedBindings.suggestedBindings = bindings.data();
-			suggestedBindings.countSuggestedBindings = (uint32_t)bindings.size();
-			CHECK_XR_RESULT(xrSuggestInteractionProfileBindings(mInstance, &suggestedBindings));
-		}
-
 		// Create hands spaces.
 		{
 			XrActionSpaceCreateInfo actionSpaceInfo{ XR_TYPE_ACTION_SPACE_CREATE_INFO };
@@ -1212,15 +1228,6 @@ namespace openxr
 			CHECK_XR_RESULT(xrCreateActionSpace(mSession, &actionSpaceInfo, &g_input.handSpace[Side::Left]));
 			actionSpaceInfo.subactionPath = g_input.handSubactionPath[Side::Right];
 			CHECK_XR_RESULT(xrCreateActionSpace(mSession, &actionSpaceInfo, &g_input.handSpace[Side::Right]));
-		}
-
-		// Create eye gaze space.
-		if (mEyeTrackingSupported)
-		{
-			XrActionSpaceCreateInfo actionSpaceInfo{ XR_TYPE_ACTION_SPACE_CREATE_INFO };
-			actionSpaceInfo.action = g_input.eyeGazeAction;
-			actionSpaceInfo.poseInActionSpace.orientation.w = 1.f;
-			CHECK_XR_RESULT(xrCreateActionSpace(mSession, &actionSpaceInfo, &g_input.eyeGazeSpace));
 		}
 
 		XrSessionActionSetsAttachInfo attachInfo{ XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO };
@@ -1236,305 +1243,337 @@ namespace openxr
 		return true;
 	}
 
-//	void PollXrActions()
-//	{
-//		g_input.handActive = { XR_FALSE, XR_FALSE };
-//		g_input.eyeGazeActive = XR_FALSE;
-//
-//		// Sync actions
-//		const XrActiveActionSet activeActionSet{ g_input.actionSet, XR_NULL_PATH };
-//		XrActionsSyncInfo syncInfo{ XR_TYPE_ACTIONS_SYNC_INFO };
-//		syncInfo.countActiveActionSets = 1;
-//		syncInfo.activeActionSets = &activeActionSet;
-//		CHECK_XR_RESULT(xrSyncActions(mSession, &syncInfo));
-//
-//		// actions
-//		// Get pose and grab action state and start haptic vibrate when hand is 90% squeezed.
-//		for (auto hand : { Side::Left, Side::Right })
-//		{
-//			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
-//			getInfo.action = g_input.grabAction;
-//			getInfo.subactionPath = g_input.handSubactionPath[hand];
-//
-//			// grab action
-//			XrActionStateFloat grabValue{ XR_TYPE_ACTION_STATE_FLOAT };
-//			CHECK_XR_RESULT(xrGetActionStateFloat(mSession, &getInfo, &grabValue));
-//			if (grabValue.isActive == XR_TRUE)
-//			{
-//				mControllerState[hand].mIndexTrigger = grabValue.currentState;
-//
-//				// Scale the rendered hand by 1.0f (open) to 0.5f (fully squeezed).
-//				g_input.handScale[hand] = 1.0f - 0.5f * grabValue.currentState;
-//				if (grabValue.currentState > 0.9f)
-//				{
-//					//XrHapticVibration vibration{ XR_TYPE_HAPTIC_VIBRATION };
-//					//vibration.amplitude = 0.5;
-//					//vibration.duration = XR_MIN_HAPTIC_DURATION;
-//					//vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
-//
-//					//XrHapticActionInfo hapticActionInfo{ XR_TYPE_HAPTIC_ACTION_INFO };
-//					//hapticActionInfo.action = g_input.vibrateAction;
-//					//hapticActionInfo.subactionPath = g_input.handSubactionPath[hand];
-//					//CHECK_XR_RESULT(xrApplyHapticFeedback(mSession, &hapticActionInfo, (XrHapticBaseHeader*)&vibration));
-//				}
-//			}
-//			else
-//			{
-//				mControllerState[hand].mIndexTrigger = 0.0f;
-//			}
-//
-//			// hand pose action
-//			getInfo.action = g_input.poseAction;
-//			XrActionStatePose poseState{ XR_TYPE_ACTION_STATE_POSE };
-//			CHECK_XR_RESULT(xrGetActionStatePose(mSession, &getInfo, &poseState));
-//			g_input.handActive[hand] = poseState.isActive;
-//			mHandPose[hand].mIsValid = poseState.isActive;
-//		}
-//
-//		// eye gaze pose action
-//		if (mEyeTrackingSupported)
-//		{
-//			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
-//			getInfo.action = g_input.eyeGazeAction;
-//			XrActionStatePose poseState{ XR_TYPE_ACTION_STATE_POSE };
-//			CHECK_XR_RESULT(xrGetActionStatePose(mSession, &getInfo, &poseState));
-//			g_input.eyeGazeActive = poseState.isActive;
-//			mEyeGazePose.mIsValid = poseState.isActive;
-//		}
-//
-//		// move action
-//		{
-//			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
-//			getInfo.action = g_input.moveAction;
-//			XrActionStateVector2f state{ XR_TYPE_ACTION_STATE_VECTOR2F };
-//			CHECK_XR_RESULT(xrGetActionStateVector2f(mSession, &getInfo, &state));
-//
-//			mControllerState[Side::Left].mThumbStick = { state.currentState.x, state.currentState.y };
-//		}
-//
-//		// rotate action
-//		{
-//			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
-//			getInfo.action = g_input.rotateAction;
-//			XrActionStateVector2f state{ XR_TYPE_ACTION_STATE_VECTOR2F };
-//			CHECK_XR_RESULT(xrGetActionStateVector2f(mSession, &getInfo, &state));
-//
-//			mControllerState[Side::Right].mThumbStick = { -state.currentState.x, -state.currentState.y };
-//		}
-//
-//		// hand trigger
-//		{
-//			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
-//			XrActionStateFloat state{ XR_TYPE_ACTION_STATE_FLOAT };
-//
-//			getInfo.action = g_input.gripActionLeft;
-//			CHECK_XR_RESULT(xrGetActionStateFloat(mSession, &getInfo, &state));
-//			mControllerState[Side::Left].mHandTrigger = state.currentState;
-//
-//			getInfo.action = g_input.gripActionRight;
-//			CHECK_XR_RESULT(xrGetActionStateFloat(mSession, &getInfo, &state));
-//			mControllerState[Side::Right].mHandTrigger = state.currentState;
-//		}
-//
-//		// trackpad
-//		{
-//			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
-//			XrActionStateVector2f state{ XR_TYPE_ACTION_STATE_VECTOR2F };
-//
-//			getInfo.action = g_input.trackpadActionLeft;
-//			CHECK_XR_RESULT(xrGetActionStateVector2f(mSession, &getInfo, &state));
-//			mControllerState[Side::Left].mTrackpad = { state.currentState.x, state.currentState.y };
-//
-//			getInfo.action = g_input.trackpadActionRight;
-//			CHECK_XR_RESULT(xrGetActionStateVector2f(mSession, &getInfo, &state));
-//			mControllerState[Side::Right].mTrackpad = { state.currentState.x, state.currentState.y };
-//		}
-//
-//		// buttons actions
-//		{
-//			uint32_t& buttonsLeft = mControllerState[Side::Left].mControllerButtons;
-//			uint32_t& buttonsRight = mControllerState[Side::Right].mControllerButtons;
-//			buttonsLeft = 0;
-//			buttonsRight = 0;
-//
-//			auto UpdateButtonState = [this](uint32_t& buttons, ControllerButtons flag, const XrAction& action) {
-//				XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
-//				XrActionStateBoolean state{ XR_TYPE_ACTION_STATE_BOOLEAN };
-//
-//				getInfo.action = action;
-//				CHECK_XR_RESULT(xrGetActionStateBoolean(mSession, &getInfo, &state));
-//				if (state.currentState)
-//				{
-//					buttons |= flag;
-//				}
-//			};
-//
-//			UpdateButtonState(buttonsLeft, ControllerButtons::Thumb, g_input.thumbStickClickActionLeft);
-//			UpdateButtonState(buttonsRight, ControllerButtons::Thumb, g_input.thumbStickClickActionRight);
-//			UpdateButtonState(buttonsLeft, ControllerButtons::A, g_input.aActionLeft);
-//			UpdateButtonState(buttonsLeft, ControllerButtons::B, g_input.bActionLeft);
-//			UpdateButtonState(buttonsRight, ControllerButtons::A, g_input.aActionRight);
-//			UpdateButtonState(buttonsRight, ControllerButtons::B, g_input.bActionRight);
-//			UpdateButtonState(buttonsLeft, ControllerButtons::Menu, g_input.menuActionLeft);
-//			UpdateButtonState(buttonsRight, ControllerButtons::Menu, g_input.menuActionRight);
-//			UpdateButtonState(buttonsLeft, ControllerButtons::Shoulder, g_input.shoulderActionLeft);
-//			UpdateButtonState(buttonsRight, ControllerButtons::Shoulder, g_input.shoulderActionRight);
-//		}
-//
-//		// There were no subaction paths specified for the quit action, because we don't care which hand did it.
-//		{
-//			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO, nullptr, g_input.quitAction, XR_NULL_PATH };
-//			XrActionStateBoolean quitValue{ XR_TYPE_ACTION_STATE_BOOLEAN };
-//			CHECK_XR_RESULT(xrGetActionStateBoolean(mSession, &getInfo, &quitValue));
-//			if ((quitValue.isActive == XR_TRUE) && (quitValue.changedSinceLastSync == XR_TRUE) && (quitValue.currentState == XR_TRUE))
-//			{
-//				CHECK_XR_RESULT(xrRequestExitSession(mSession));
-//			}
-//		}
-//	}
-//
-//	void PollXrEvents()
-//	{
-//		auto PollEvent = [&](XrEventDataBuffer& eventData) -> bool {
-//			eventData.type = XR_TYPE_EVENT_DATA_BUFFER;
-//			eventData.next = nullptr;
-//			return xrPollEvent(mInstance, &eventData) == XR_SUCCESS;
-//		};
-//
-//		XrEventDataBuffer eventData;
-//		while (PollEvent(eventData))
-//		{
-//			switch (eventData.type)
-//			{
-//			case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
-//			{
-//				mExitRenderLoop = true;
-//				mRequestRestart = false;
-//				return;
-//			}
-//			case XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED:
-//			{
-//				const auto stateEvent = *reinterpret_cast<const XrEventDataSessionStateChanged*>(&eventData);
-//				TFE_ASSERT(mSession != XR_NULL_HANDLE && mSession == stateEvent.session);
-//				switch (stateEvent.state)
-//				{
-//				case XR_SESSION_STATE_READY:
-//				{
-//					TFE_ASSERT(mSession != XR_NULL_HANDLE);
-//					XrSessionBeginInfo sessionBeginInfo{ XR_TYPE_SESSION_BEGIN_INFO };
-//					sessionBeginInfo.primaryViewConfigurationType = viewConfigType;
-//					CHECK_XR_RESULT(xrBeginSession(mSession, &sessionBeginInfo));
-//					mSessionRunning = true;
-//					break;
-//				}
-//				case XR_SESSION_STATE_STOPPING:
-//				{
-//					mSessionRunning = false;
-//					CHECK_XR_RESULT(xrEndSession(mSession));
-//					break;
-//				}
-//				case XR_SESSION_STATE_EXITING:
-//				{
-//					// Do not attempt to restart, because user closed this session.
-//					mExitRenderLoop = true;
-//					mRequestRestart = false;
-//					break;
-//				}
-//				case XR_SESSION_STATE_LOSS_PENDING:
-//					// Session was lost, so start over and poll for new systemId.
-//					mExitRenderLoop = true;
-//					mRequestRestart = true;
-//				break;
-//				default:
-//					TFE_DEBUG("VR", "Ignoring session state event {}", GetSessionStateStr(stateEvent.state));
-//					break;
-//				}
-//
-//				XrSessionState lastState = XR_SESSION_STATE_UNKNOWN;
-//				bool lastSessionRunning = mSessionRunning;
-//				if (lastState != stateEvent.state || lastSessionRunning != mSessionRunning)
-//				{
-//					lastState = stateEvent.state;
-//					lastSessionRunning = mSessionRunning;
-//					TFE_DEBUG("VR", "stateEvent.state={}, mSessionRunning={}", GetSessionStateStr(stateEvent.state), mSessionRunning);
-//				}
-//				
-//			}
-//			break;
-//			case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING:
-//			case XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED:
-//			default:
-//				TFE_DEBUG("VR", "Ignoring event {}", GetStructureTypeStr(eventData.type));
-//				break;
-//			}
-//		}
-//	}
-//
-//	bool CreateTextureSwapChain(const u32vec2& size)
-//	{
-//		if (mSwapChainLength > 0)
-//		{
-//			return true; // already created
-//		}
-//
-//		DestroySwapChain();
-//
-//		const bool useMultiView = UseMultiView();
-//
-//		// Allocate a texture swap chain for each eye with the application's EGLContext current.
-//		const size_t bufferCount = useMultiView ? 1 : 2;
-//		for (size_t eye = 0; eye < bufferCount; eye++)
-//		{
-//			std::vector<Texture*> textures;
-//			XrSwapchain swapchain = OpenXRCreateSwapchain(textures, mSession, mSwapchainFormat,
-//				mTargetSize.x, mTargetSize.y, 1, useMultiView ? 2 : 1);
-//			mSwapchains[eye] = swapchain;
-//			mSwapChainLength = (uint32_t)textures.size();
-//
-//			for (size_t i = 0; i < textures.size(); i++)
-//			{
-//				// color
-//				mColorTextures[eye].emplace_back(textures[i]);
-//
-//				// depth
-//				Texture::Desc desc;
-//				desc.type = useMultiView ? Texture::Type::Texture2DArray : Texture::Type::Texture2D;
-//				desc.format = pixelformat::PixelFormat::Depth24Stencil8;
-//				desc.usage = ResourceUsage::Dynamic;
-//				desc.usageFlags = Texture::UsageDepthStencilAttachmentBIT | Texture::UsageSampledBIT | Texture::UsageTransferDstBIT | Texture::UsageTransferSrcBIT;
-//				desc.width = size.x;
-//				desc.height = size.y;
-//				desc.depth = 1;
-//				desc.layerCount = useMultiView ? 2 : 1;
-//				desc.mipMapCount = 1;
-//				mDepthTextures[eye].emplace_back(ae::renderer::context.mpRenderer->GetGfxAdapter()->CreateTexture(desc, desc.format, nullptr, false, ae::core::Format("VR depth texture eye {}, texture {}", eye, i).c_str()));
-//
-//				// render target
-//				IntrusivePtr<Texture> attachmentTextures[2] = { mDepthTextures[eye][i], mColorTextures[eye][i] };
-//				RenderTarget::Desc rtdesc;
-//				rtdesc.width = size.x;
-//				rtdesc.height = size.y;
-//				rtdesc.attachmentMask = RenderTarget::AttachmentFlags::DepthAndStencil | RenderTarget::AttachmentFlags::Color0;
-//				mRenderTargets[eye].emplace_back(CreateRenderTarget(rtdesc, reinterpret_cast<Texture* const* const>(attachmentTextures),
-//					ae::core::Format("VR render target eye {}, texture {}", eye, i).c_str(), nullptr, useMultiView));
-//			}
-//		}
-//
-//		return true;
-//	}
-//
-	uint32_t GetTextureSwapChainLength()
+	void PollXrActions()
+	{
+		g_input.handActive = { XR_FALSE, XR_FALSE };
+		g_input.eyeGazeActive = XR_FALSE;
+
+		// Sync actions
+		const XrActiveActionSet activeActionSet{ g_input.actionSet, XR_NULL_PATH };
+		XrActionsSyncInfo syncInfo{ XR_TYPE_ACTIONS_SYNC_INFO };
+		syncInfo.countActiveActionSets = 1;
+		syncInfo.activeActionSets = &activeActionSet;
+		CHECK_XR_RESULT(xrSyncActions(mSession, &syncInfo));
+
+		// actions
+		// Get pose and grab action state and start haptic vibrate when hand is 90% squeezed.
+		for (auto hand : { Side::Left, Side::Right })
+		{
+			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
+			getInfo.action = g_input.grabAction;
+			getInfo.subactionPath = g_input.handSubactionPath[hand];
+
+			// grab action
+			XrActionStateFloat grabValue{ XR_TYPE_ACTION_STATE_FLOAT };
+			CHECK_XR_RESULT(xrGetActionStateFloat(mSession, &getInfo, &grabValue));
+			if (grabValue.isActive == XR_TRUE)
+			{
+				mControllerState[hand].mIndexTrigger = grabValue.currentState;
+
+				// Scale the rendered hand by 1.0f (open) to 0.5f (fully squeezed).
+				g_input.handScale[hand] = 1.0f - 0.5f * grabValue.currentState;
+				if (grabValue.currentState > 0.9f)
+				{
+					//XrHapticVibration vibration{ XR_TYPE_HAPTIC_VIBRATION };
+					//vibration.amplitude = 0.5;
+					//vibration.duration = XR_MIN_HAPTIC_DURATION;
+					//vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
+
+					//XrHapticActionInfo hapticActionInfo{ XR_TYPE_HAPTIC_ACTION_INFO };
+					//hapticActionInfo.action = g_input.vibrateAction;
+					//hapticActionInfo.subactionPath = g_input.handSubactionPath[hand];
+					//CHECK_XR_RESULT(xrApplyHapticFeedback(mSession, &hapticActionInfo, (XrHapticBaseHeader*)&vibration));
+				}
+			}
+			else
+			{
+				mControllerState[hand].mIndexTrigger = 0.0f;
+			}
+
+			// hand pose action
+			getInfo.action = g_input.poseAction;
+			XrActionStatePose poseState{ XR_TYPE_ACTION_STATE_POSE };
+			CHECK_XR_RESULT(xrGetActionStatePose(mSession, &getInfo, &poseState));
+			g_input.handActive[hand] = poseState.isActive;
+			mHandPose[hand].mIsValid = poseState.isActive;
+		}
+
+		// move action
+		{
+			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
+			getInfo.action = g_input.moveAction;
+			XrActionStateVector2f state{ XR_TYPE_ACTION_STATE_VECTOR2F };
+			CHECK_XR_RESULT(xrGetActionStateVector2f(mSession, &getInfo, &state));
+
+			mControllerState[Side::Left].mThumbStick = { state.currentState.x, state.currentState.y };
+		}
+
+		// rotate action
+		{
+			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
+			getInfo.action = g_input.rotateAction;
+			XrActionStateVector2f state{ XR_TYPE_ACTION_STATE_VECTOR2F };
+			CHECK_XR_RESULT(xrGetActionStateVector2f(mSession, &getInfo, &state));
+
+			mControllerState[Side::Right].mThumbStick = { -state.currentState.x, -state.currentState.y };
+		}
+
+		// hand trigger
+		{
+			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
+			XrActionStateFloat state{ XR_TYPE_ACTION_STATE_FLOAT };
+
+			getInfo.action = g_input.gripActionLeft;
+			CHECK_XR_RESULT(xrGetActionStateFloat(mSession, &getInfo, &state));
+			mControllerState[Side::Left].mHandTrigger = state.currentState;
+
+			getInfo.action = g_input.gripActionRight;
+			CHECK_XR_RESULT(xrGetActionStateFloat(mSession, &getInfo, &state));
+			mControllerState[Side::Right].mHandTrigger = state.currentState;
+		}
+
+		// trackpad
+		{
+			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
+			XrActionStateVector2f state{ XR_TYPE_ACTION_STATE_VECTOR2F };
+
+			getInfo.action = g_input.trackpadActionLeft;
+			CHECK_XR_RESULT(xrGetActionStateVector2f(mSession, &getInfo, &state));
+			mControllerState[Side::Left].mTrackpad = { state.currentState.x, state.currentState.y };
+
+			getInfo.action = g_input.trackpadActionRight;
+			CHECK_XR_RESULT(xrGetActionStateVector2f(mSession, &getInfo, &state));
+			mControllerState[Side::Right].mTrackpad = { state.currentState.x, state.currentState.y };
+		}
+
+		// buttons actions
+		{
+			uint32_t& buttonsLeft = mControllerState[Side::Left].mControllerButtons;
+			uint32_t& buttonsRight = mControllerState[Side::Right].mControllerButtons;
+			buttonsLeft = 0;
+			buttonsRight = 0;
+
+			auto UpdateButtonState = [](uint32_t& buttons, ControllerButtons flag, const XrAction& action) {
+				XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO };
+				XrActionStateBoolean state{ XR_TYPE_ACTION_STATE_BOOLEAN };
+
+				getInfo.action = action;
+				CHECK_XR_RESULT(xrGetActionStateBoolean(mSession, &getInfo, &state));
+				if (state.currentState)
+				{
+					buttons |= flag;
+				}
+			};
+
+			UpdateButtonState(buttonsLeft, ControllerButtons::Thumb, g_input.thumbStickClickActionLeft);
+			UpdateButtonState(buttonsRight, ControllerButtons::Thumb, g_input.thumbStickClickActionRight);
+			UpdateButtonState(buttonsLeft, ControllerButtons::A, g_input.aActionLeft);
+			UpdateButtonState(buttonsLeft, ControllerButtons::B, g_input.bActionLeft);
+			UpdateButtonState(buttonsRight, ControllerButtons::A, g_input.aActionRight);
+			UpdateButtonState(buttonsRight, ControllerButtons::B, g_input.bActionRight);
+			UpdateButtonState(buttonsLeft, ControllerButtons::Menu, g_input.menuActionLeft);
+			UpdateButtonState(buttonsRight, ControllerButtons::Menu, g_input.menuActionRight);
+			UpdateButtonState(buttonsLeft, ControllerButtons::Shoulder, g_input.shoulderActionLeft);
+			UpdateButtonState(buttonsRight, ControllerButtons::Shoulder, g_input.shoulderActionRight);
+		}
+
+		// There were no subaction paths specified for the quit action, because we don't care which hand did it.
+		{
+			XrActionStateGetInfo getInfo{ XR_TYPE_ACTION_STATE_GET_INFO, nullptr, g_input.quitAction, XR_NULL_PATH };
+			XrActionStateBoolean quitValue{ XR_TYPE_ACTION_STATE_BOOLEAN };
+			CHECK_XR_RESULT(xrGetActionStateBoolean(mSession, &getInfo, &quitValue));
+			if ((quitValue.isActive == XR_TRUE) && (quitValue.changedSinceLastSync == XR_TRUE) && (quitValue.currentState == XR_TRUE))
+			{
+				CHECK_XR_RESULT(xrRequestExitSession(mSession));
+			}
+		}
+	}
+
+	void PollXrEvents()
+	{
+		auto PollEvent = [&](XrEventDataBuffer& eventData) -> bool {
+			eventData.type = XR_TYPE_EVENT_DATA_BUFFER;
+			eventData.next = nullptr;
+			return xrPollEvent(mInstance, &eventData) == XR_SUCCESS;
+		};
+
+		XrEventDataBuffer eventData;
+		while (PollEvent(eventData))
+		{
+			switch (eventData.type)
+			{
+			case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
+			{
+				mExitRenderLoop = true;
+				mRequestRestart = false;
+				return;
+			}
+			case XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED:
+			{
+				const auto stateEvent = *reinterpret_cast<const XrEventDataSessionStateChanged*>(&eventData);
+				TFE_ASSERT(mSession != XR_NULL_HANDLE && mSession == stateEvent.session);
+				switch (stateEvent.state)
+				{
+				case XR_SESSION_STATE_READY:
+				{
+					TFE_ASSERT(mSession != XR_NULL_HANDLE);
+					XrSessionBeginInfo sessionBeginInfo{ XR_TYPE_SESSION_BEGIN_INFO };
+					sessionBeginInfo.primaryViewConfigurationType = viewConfigType;
+					CHECK_XR_RESULT(xrBeginSession(mSession, &sessionBeginInfo));
+					mSessionRunning = true;
+					break;
+				}
+				case XR_SESSION_STATE_STOPPING:
+				{
+					mSessionRunning = false;
+					CHECK_XR_RESULT(xrEndSession(mSession));
+					break;
+				}
+				case XR_SESSION_STATE_EXITING:
+				{
+					// Do not attempt to restart, because user closed this session.
+					mExitRenderLoop = true;
+					mRequestRestart = false;
+					break;
+				}
+				case XR_SESSION_STATE_LOSS_PENDING:
+					// Session was lost, so start over and poll for new systemId.
+					mExitRenderLoop = true;
+					mRequestRestart = true;
+				break;
+				default:
+					TFE_INFO("VR", "Ignoring session state event {}", GetSessionStateStr(stateEvent.state));
+					break;
+				}
+
+				XrSessionState lastState = XR_SESSION_STATE_UNKNOWN;
+				bool lastSessionRunning = mSessionRunning;
+				if (lastState != stateEvent.state || lastSessionRunning != mSessionRunning)
+				{
+					lastState = stateEvent.state;
+					lastSessionRunning = mSessionRunning;
+					TFE_INFO("VR", "stateEvent.state={}, mSessionRunning={}", GetSessionStateStr(stateEvent.state), mSessionRunning);
+				}
+				
+			}
+			break;
+			case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING:
+			case XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED:
+			default:
+				TFE_INFO("VR", "Ignoring event {}", GetStructureTypeStr(eventData.type));
+				break;
+			}
+		}
+	}
+
+	XrSwapchain CreateXrSwapchain(std::vector<GLuintPair>& textures, XrSession session, GLenum pixelFormat, uint32_t width, uint32_t height, uint32_t sampleCount, uint32_t arraySize)
+	{
+		textures.clear();
+
+		XrSwapchain swapchain;
+		XrSwapchainCreateInfo swapchainCreateInfo{ XR_TYPE_SWAPCHAIN_CREATE_INFO };
+		swapchainCreateInfo.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT; // TODO: XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT
+		swapchainCreateInfo.format = pixelFormat; //GL_RGBA16F;// GL_SRGB8_ALPHA8; //GL_RGBA16F
+		swapchainCreateInfo.sampleCount = sampleCount;
+		swapchainCreateInfo.arraySize = arraySize;
+		swapchainCreateInfo.faceCount = 1;
+		swapchainCreateInfo.mipCount = 1;
+		swapchainCreateInfo.width = width;
+		swapchainCreateInfo.height = height;
+		CHECK_XR_RESULT(xrCreateSwapchain(session, &swapchainCreateInfo, &swapchain));
+
+		uint32_t chainLength;
+		CHECK_XR_RESULT(xrEnumerateSwapchainImages(swapchain, 0, &chainLength, nullptr));
+
+#if defined(USE_GL_ES)
+		std::vector<XrSwapchainImageOpenGLESKHR> swapchainImages;
+		swapchainImages.resize(chainLength, { XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR });
+#else
+		std::vector<XrSwapchainImageOpenGLKHR> swapchainImages;
+		swapchainImages.resize(chainLength, { XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR });
+#endif
+		CHECK_XR_RESULT(xrEnumerateSwapchainImages(swapchain, (uint32_t)swapchainImages.size(), &chainLength, reinterpret_cast<XrSwapchainImageBaseHeader*>(swapchainImages.data())));
+
+		if (!swapchain)
+		{
+			return nullptr;
+		}
+
+		textures.reserve(swapchainImages.size());
+		for (const auto& image : swapchainImages)
+		{
+			// depth texture
+			//TextureGpu* depthTexture = new TextureGpu();
+			//depthTexture->createArray(width, height, arraySize, TEX_RGBA8, 1);
+			GLuint depthTexture;
+			glGenTextures(1, &depthTexture);
+			if (arraySize > 1)
+			{
+				glBindTexture(GL_TEXTURE_2D_ARRAY, depthTexture);
+				glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+				glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+				glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+				glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+				const GLfloat borderColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, borderColor);
+				//glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH24_STENCIL8, width, height, 2, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+				glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_DEPTH24_STENCIL8, width, height, 2);
+				glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+			}
+			else
+			{
+				glBindTexture(GL_TEXTURE_2D, depthTexture);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+				const GLfloat borderColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
+				//glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, width, height, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+				glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH24_STENCIL8, width, height);
+				glBindTexture(GL_TEXTURE_2D, 0);
+			}
+			//glBindTexture(GL_TEXTURE_2D_ARRAY, depthTexture);
+			//glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			//glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			//glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			//glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			//const GLfloat borderColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+			//glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, borderColor);
+			////glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH24_STENCIL8, width, height, 2, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+			//glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_DEPTH24_STENCIL8, width, height, 2);
+			//glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+			TFE_ASSERT_GL;
+
+			// color/depth pair
+			textures.emplace_back(GLuintPair{ image.image, depthTexture });
+		}
+
+		return swapchain;
+	}
+
+	size_t GetTextureSwapChainLength()
 	{
 		return mSwapChainLength;
 	}
 
 	void DestroySwapChain()
 	{
-		for (size_t eye = 0; eye < 2; eye++)
+		for (size_t eye = 0; eye < Side::Count; eye++)
 		{
-			//mRenderTargets[eye].clear();
-			//mColorTextures[eye].clear();
-			//mDepthTextures[eye].clear();
+			for (const GLuintPair& textures : mTextures[eye])
+			{
+				glDeleteTextures(1, &textures.second); // delete depth only as color is owned by OpenXR and will be deleted with xrDestroySwapchain(?)
+				TFE_ASSERT_GL;
+			}
+			mTextures[eye].clear();
+
+			for (const GLuint& framebuffer : mRenderTargets[eye])
+			{
+				glDeleteFramebuffers(1, &framebuffer);
+				TFE_ASSERT_GL;
+			}
+			mRenderTargets[eye].clear();
 
 			if (mSwapchains[eye])
 			{
@@ -1547,14 +1586,15 @@ namespace openxr
 
 	bool UseMultiView()
 	{
-		return true;
+		return false;
+		//return true;
 	}
 
 	bool IsFeatureSupported(Feature feature)
 	{
 		if (feature == Feature::EyeTracking)
 		{
-			return mEyeTrackingSupported;
+			return false;
 		}
 		else if (feature == Feature::Passthrough)
 		{
@@ -1564,448 +1604,230 @@ namespace openxr
 		return false;
 	}
 
-//	UpdateStatus UpdateFrame(const Camera& camera, float userScale)
+	bool CreateSwapChain(const Vec2ui& size)
+	{
+		if (mSwapChainLength > 0)
+		{
+			return true; // already created
+		}
+
+		DestroySwapChain();
+
+		const bool useMultiView = UseMultiView();
+
+		//if (!useMultiView)
+		//{
+		//	TFE_ERROR("VR", "non multi view rendering not supported yet");
+		//	return false;
+		//}
+
+		// allocate a texture swap chain for each eye
+		const size_t bufferCount = useMultiView ? 1 : 2;
+		for (size_t eye = 0; eye < bufferCount; eye++)
+		{
+			XrSwapchain swapchain = CreateXrSwapchain(mTextures[eye], mSession, mSwapchainFormat,
+				mTargetSize.x, mTargetSize.y, 1, useMultiView ? 2 : 1);
+			mSwapchains[eye] = swapchain;
+			mSwapChainLength = mTextures[eye].size();
+
+			// framebuffers
+			mRenderTargets[eye].reserve(mSwapChainLength);
+			for (size_t i = 0; i < mTextures[eye].size(); i++)
+			{
+				GLuint framebuffer;
+				glGenFramebuffers(1, &framebuffer);
+				glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+				TFE_ASSERT_GL;
+				mRenderTargets[eye].push_back(framebuffer);
+
+				if (useMultiView)
+				{
+					glFramebufferTextureMultiviewOVR(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, mTextures[eye][i].first,
+						0 /* level */,
+						0 /* baseViewIndex */,
+						2 /* numViews */);
+					glFramebufferTextureMultiviewOVR(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, mTextures[eye][i].second,
+						0 /* level */,
+						0 /* baseViewIndex */,
+						2 /* numViews */);
+					TFE_ASSERT_GL;
+				}
+				else
+				{
+					//TFE_ERROR("VR", "non multi view rendering not supported yet");
+					glFramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, mTextures[eye][i].first, 0 /* level */);
+					glFramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, mTextures[eye][i].second, 0 /* level */);
+					TFE_ASSERT_GL;
+					OpenGL_Debug::CheckRenderTargetStatus(GL_DRAW_FRAMEBUFFER);
+				}
+			}
+		}
+
+		return true;
+	}
+
+	void UpdateView(Side eye)
+	{
+		if (!mSessionRunning || !mFrameState.shouldRender)
+		{
+			return;
+		}
+		//const bool useMultiView = UseMultiView();
+		//const size_t bufferCount = useMultiView ? 1 : 2;
+		//for (size_t eye = 0; eye < bufferCount; eye++)
+		{
+			// Each view has a separate swapchain which is acquired, rendered to, and released.
+			XrSwapchain& swapchain = mSwapchains[eye];
+
+			XrSwapchainImageAcquireInfo acquireInfo{ XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
+			CHECK_XR_RESULT(xrAcquireSwapchainImage(swapchain, &acquireInfo, &mTextureSwapChainIndex));
+
+			XrSwapchainImageWaitInfo waitInfo{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
+			waitInfo.timeout = XR_INFINITE_DURATION;
+			CHECK_XR_RESULT(xrWaitSwapchainImage(swapchain, &waitInfo));
+		}
+	}
+
+	void Commit(Side eye)
+	{
+		if (!mSessionRunning || !mFrameState.shouldRender)
+		{
+			return;
+		}
+
+		XrSwapchainImageReleaseInfo releaseInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+		CHECK_XR_RESULT(xrReleaseSwapchainImage(mSwapchains[eye], &releaseInfo));
+	}
+
+	bool SubmitFrame()
+	{
+		if (!mSessionRunning)
+		{
+			return true;
+		}
+
+		// Set-up the compositor layers for this frame.
+		// NOTE: Multiple independent layers are allowed, but they need to be added
+		// in a depth consistent order.
+
+		static std::vector<XrCompositionLayerBaseHeader*> layers;
+		layers.clear();
+
+		if (mFrameState.shouldRender == XR_TRUE)
+		{
+			// passthrough layer is backmost layer (if available)
+			if (mPassthroughLayer != XR_NULL_HANDLE)
+			{
+				static XrCompositionLayerPassthroughFB compositionPassthroughLayer{ XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB };
+				compositionPassthroughLayer.flags = 0;//XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+				compositionPassthroughLayer.layerHandle = mPassthroughLayer;
+				layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&compositionPassthroughLayer));
+			}
+
+			static XrCompositionLayerProjection projectionLayer{ XR_TYPE_COMPOSITION_LAYER_PROJECTION };
+			projectionLayer.space = mAppSpace;
+			projectionLayer.viewCount = (uint32_t)mProjectionLayerViews.size();
+			projectionLayer.views = mProjectionLayerViews.data();
+			projectionLayer.layerFlags = layers.empty() ? 0 : XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT | XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+			layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&projectionLayer));
+		}
+		else
+		{
+			//TFE_DEBUG("VR", "mFrameState.shouldRender==FALSE in OpenXR::SubmitFrame()");
+		}
+
+		XrFrameEndInfo frameEndInfo{ XR_TYPE_FRAME_END_INFO };
+		frameEndInfo.displayTime = mFrameState.predictedDisplayTime;
+#if defined(DEVICE_ML2)
+		frameEndInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
+#else
+		frameEndInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+#endif
+		frameEndInfo.layerCount = (uint32_t)layers.size();
+		frameEndInfo.layers = layers.data();
+		CHECK_XR_RESULT(xrEndFrame(mSession, &frameEndInfo));
+
+		return true;
+	}
+
+//	RenderTarget* GetCurrentTarget(Side eye)
 //	{
-//		if (!CreateTextureSwapChain(mTargetSize))
-//		{
-//			return UpdateStatus::ShouldQuit;
-//		}
-//
-//		mUserScale = userScale;
-//
-//		PollXrEvents();
-//		if (mExitRenderLoop)
-//		{
-//			return UpdateStatus::ShouldQuit;
-//		}
-//
-//		if (mSessionRunning)
-//		{
-//			PollXrActions();
-//		}
-//		else
-//		{
-//			TFE_DEBUG("VR", "UpdateStatus::NotVisible because !mSessionRunning");
-//			return UpdateStatus::NotVisible;
-//		}
-//
-//		XrFrameWaitInfo frameWaitInfo{ XR_TYPE_FRAME_WAIT_INFO };
-//		CHECK_XR_RESULT(xrWaitFrame(mSession, &frameWaitInfo, &mFrameState));
-//
-//		XrFrameBeginInfo frameBeginInfo{ XR_TYPE_FRAME_BEGIN_INFO };
-//		CHECK_XR_RESULT(xrBeginFrame(mSession, &frameBeginInfo));
-//
-//		if (mFrameState.shouldRender != XR_TRUE)
-//		{
-//			TFE_DEBUG("VR", "UpdateStatus::ShouldNotRender because mFrameState.shouldRender != XR_TRUE");
-//			return UpdateStatus::ShouldNotRender;
-//		}
-//
-//		XrViewState viewState{ XR_TYPE_VIEW_STATE };
-//		uint32_t viewCapacityInput = (uint32_t)mViewConfigViews.size();
-//		uint32_t viewCountOutput;
-//
-//		XrViewLocateInfo viewLocateInfo{ XR_TYPE_VIEW_LOCATE_INFO };
-//		viewLocateInfo.viewConfigurationType = viewConfigType;
-//		viewLocateInfo.displayTime = mFrameState.predictedDisplayTime;
-//		viewLocateInfo.space = mAppSpace;
-//
-//		static std::vector<XrView> views(viewCapacityInput, { XR_TYPE_VIEW });
-//
-//		CHECK_XR_RESULT(xrLocateViews(mSession, &viewLocateInfo, &viewState, viewCapacityInput, &viewCountOutput, views.data()));
-//		if ((viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) == 0 ||
-//			(viewState.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) == 0)
-//		{
-//			TFE_DEBUG("VR", "UpdateStatus::NotVisible because no valid tracking poses");
-//			return UpdateStatus::NotVisible; // There is no valid tracking poses for the views.
-//		}
-//
-//		TFE_ASSERT(viewCountOutput == viewCapacityInput);
-//		TFE_ASSERT(viewCountOutput == mViewConfigViews.size());
-//
-//		mProjectionLayerViews.resize(viewCountOutput);
-//
-//		const mat4 cameraLtw{ camera.GetTransformation().BuildMatrix() };
-//		const vec3& cameraPosition = cameraLtw.GetTranslation();
-//		const XrVector3f scaleVec{ 1.f, 1.f, 1.f };
-//		const quat cameraOrientation{ cameraLtw };
-//
-//		const bool useMultiview = UseMultiView();
-//
-//		// headset/eyes
-//		{
-//			for (size_t viewIndex = 0; viewIndex < Side::Count; viewIndex++)
-//			{
-//				XrCompositionLayerProjectionView& layerView = mProjectionLayerViews[viewIndex];
-//				layerView = { XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW };
-//				layerView.pose = views[viewIndex].pose;
-//				layerView.fov = views[viewIndex].fov;
-//				layerView.subImage.swapchain = useMultiview ? mSwapchains[0] : mSwapchains[viewIndex];
-//				layerView.subImage.imageRect.offset = { 0, 0 };
-//				layerView.subImage.imageRect.extent = { (int32_t)mTargetSize.x, (int32_t)mTargetSize.y };
-//				layerView.subImage.imageArrayIndex = useMultiview ? (uint32_t)viewIndex : 0;
-//
-//				const auto& pose = layerView.pose;
-//				XrMatrix4x4f proj;
-//				XrMatrix4x4f_CreateProjectionFov(&proj, GRAPHICS_OPENGL, layerView.fov, camera.GetFrustum().GetNearPlane(), camera.GetFrustum().GetFarPlane());
-//				mProj[viewIndex] = mat4{ proj.m };
-//
-//				// by matrix
-//				//XrMatrix4x4f toView;
-//				//XrMatrix4x4f_CreateTranslationRotationScale(&toView, &pose.position, &pose.orientation, &scaleVec);
-//				////XrMatrix4x4f view;
-//				////XrMatrix4x4f_InvertRigidBody(&view, &toView);
-//				//mEyeLtw[viewIndex] = mat4{ toView.m } * cameraLtw;
-//
-//				// by quat
-//				const quat orientation = quat{ layerView.pose.orientation.w, layerView.pose.orientation.x, layerView.pose.orientation.y, layerView.pose.orientation.z };
-//				const vec3 position = vec3{ layerView.pose.position.x, layerView.pose.position.y, layerView.pose.position.z };
-//				//const quat f = cameraOrientation * orientation;
-//				//const vec3 p = mUserScale * (cameraOrientation * position) + cameraPosition;
-//				//mEyePose[viewIndex].mRotation = f;
-//				//mEyePose[viewIndex].mPosition = p;
-//				//mEyePose[viewIndex].mTransformation = { mat3{mEyePose[viewIndex].mRotation}, mEyePose[viewIndex].mPosition };
-//
-//				mEyePose[viewIndex].mRotationLocal = orientation;
-//				mEyePose[viewIndex].mPositionLocal = position;
-//				mEyePose[viewIndex].mTransformationLocal = { mat3{mEyePose[viewIndex].mRotationLocal}, mEyePose[viewIndex].mPositionLocal };
-//			}
-//
-//			// world transformation & user scale
-//			{
-//				for (size_t viewIndex = 0; viewIndex < Side::Count; viewIndex++)
-//				{
-//					const quat& orientation = mEyePose[viewIndex].mRotationLocal;
-//					const vec3& position = mEyePose[viewIndex].mPositionLocal;
-//
-//					const quat f = cameraOrientation * orientation;
-//					const vec3 p = cameraOrientation * (mUserScale * position) + cameraPosition;
-//					mEyePose[viewIndex].mRotation = f;
-//					mEyePose[viewIndex].mPosition = p;
-//					mEyePose[viewIndex].mTransformation = { mat3{mEyePose[viewIndex].mRotation}, mEyePose[viewIndex].mPosition };
-//				}
-//			}
-//		}
-//
-//		// For each locatable space that we want to visualize, render a 25cm cube.
-//		//std::vector<Space> spaces;
-//
-//		//for (XrSpace visualizedSpace : g_visualizedSpaces)
-//		//{
-//		//	XrSpaceLocation spaceLocation{ XR_TYPE_SPACE_LOCATION };
-//		//	XrResult res = xrLocateSpace(visualizedSpace, g_appSpace, frameState.predictedDisplayTime, &spaceLocation);
-//		//	if (XR_UNQUALIFIED_SUCCESS(res))
-//		//	{
-//		//		if ((spaceLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 &&
-//		//			(spaceLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0)
-//		//		{
-//		//			spaces.push_back(Space{ spaceLocation.pose, {0.25f, 0.25f, 0.25f}, g_spaceNames[visualizedSpace] });
-//		//		}
-//		//	}
-//		//	else
-//		//	{
-//		//		// Tracking loss is expected when the hand is not active so only log a message
-//		//		// if the hand is active.
-//		//		//if (g_input.handActive[hand] == XR_TRUE) // TODO:
-//		//		{
-//		//			TFE_INFO("VR", "Unable to locate a visualized reference space in app space: {}", res);
-//		//		}
-//		//	}
-//		//}
-//
-//		// controllers
-//		{
-//			//// Render a 10cm cube scaled by grabAction for each hand. Note renderHand will only be
-//			//// true when the application has focus.
-//			///// @todo Remove these if you do not want to draw things in hand space.
-//			const char* handName[] = { "left", "right" };
-//			for (auto hand : { Side::Left, Side::Right })
-//			{
-//				XrSpaceLocation spaceLocation{ XR_TYPE_SPACE_LOCATION };
-//				XrResult res = xrLocateSpace(g_input.handSpace[hand], mAppSpace, mFrameState.predictedDisplayTime, &spaceLocation);
-//				CHECK_XR_RESULT(res);
-//				if (XR_UNQUALIFIED_SUCCESS(res))
-//				{
-//					if ((spaceLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 &&
-//						(spaceLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0)
-//					{
-//						//float scale = 0.1f * g_input.handScale[hand];
-//						//std::string name = handName[hand]; name += "Hand";
-//						//spaces.push_back(Space{ spaceLocation.pose, {scale, scale, scale},name });
-//
-//						// by matrix
-//						//XrMatrix4x4f ltw;
-//						//constexpr XrVector3f sc{ 1.0f, 1.0f, 1.0f };
-//						//XrMatrix4x4f_CreateTranslationRotationScale(&ltw, &spaceLocation.pose.position, &spaceLocation.pose.orientation, &sc);
-//						//const mat4 m = mat4{ ltw.m } * cameraLtw;
-//						//mHandPose[hand].mTransformation = m;
-//
-//						// by quat
-//						const quat orientation = quat{ spaceLocation.pose.orientation.w, spaceLocation.pose.orientation.x, spaceLocation.pose.orientation.y, spaceLocation.pose.orientation.z };
-//						const vec3 position = vec3{ spaceLocation.pose.position.x, spaceLocation.pose.position.y, spaceLocation.pose.position.z };
-//						//const quat f = cameraOrientation * orientation;
-//						//const vec3 p = (cameraOrientation * position) + cameraPosition;
-//						//mHandPose[hand].mRotation = f;
-//						//mHandPose[hand].mPosition = p;
-//						//mHandPose[hand].mTransformation = { mat3{mHandPose[hand].mRotation}, mHandPose[hand].mPosition };
-//
-//						mHandPose[hand].mRotationLocal = orientation * quat::FromAngleAndAxis(Radians(-90.0f), vec3{ 1, 0, 0 }); // make forward from -y to -z
-//						mHandPose[hand].mPositionLocal = position;
-//						mHandPose[hand].mTransformationLocal = { mat3{mHandPose[hand].mRotationLocal}, mHandPose[hand].mPositionLocal };
-//					}
-//				}
-//				else
-//				{
-//					// Tracking loss is expected when the hand is not active so only log a message if the hand is active.
-//					if (g_input.handActive[hand] == XR_TRUE)
-//					{
-//						TFE_DEBUG("VR", "Unable to locate {} hand action space in app space: {}", handName[hand], res);
-//					}
-//				}
-//			}
-//
-//			// world transformation & user scale
-//			{
-//				for (size_t viewIndex = 0; viewIndex < Side::Count; viewIndex++)
-//				{
-//					const quat& orientation = mHandPose[viewIndex].mRotationLocal;
-//					const vec3& position = mHandPose[viewIndex].mPositionLocal;
-//
-//					const quat f = cameraOrientation * orientation;
-//					const vec3 p = cameraOrientation * (mUserScale * position) + cameraPosition;
-//					mHandPose[viewIndex].mRotation = f;
-//					mHandPose[viewIndex].mPosition = p;
-//					mHandPose[viewIndex].mTransformation = { mat3{mHandPose[viewIndex].mRotation}, mHandPose[viewIndex].mPosition };
-//				}
-//			}
-//		}
-//
-//		// eye gaze
-//		if (mEyeTrackingSupported)
-//		{
-//			mat4 middle = mEyePose[0].mTransformation;
-//			//vec3 middlepw = 0.5f * (mEyePose[0].mTransformation.GetTranslation() + mEyePose[1].mTransformation.GetTranslation());
-//			vec3 middlepw = 0.5f * (mEyePose[0].mPosition + mEyePose[1].mPosition);
-//			middle.SetTranslation(middlepw);
-//
-//			XrSpaceLocation spaceLocation{ XR_TYPE_SPACE_LOCATION };
-//			XrResult res = xrLocateSpace(g_input.eyeGazeSpace, mAppSpace, mFrameState.predictedDisplayTime, &spaceLocation);
-//			CHECK_XR_RESULT(res);
-//			if (XR_UNQUALIFIED_SUCCESS(res))
-//			{
-//				if ((spaceLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 &&
-//					(spaceLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0)
-//				{
-//					if (spaceLocation.pose.position.x != 0.0f || spaceLocation.pose.position.y != 0.0f || spaceLocation.pose.position.z != 0.0f)
-//					{
-//						std::ignore = 5;
-//					}
-//
-//					// by matrix
-//					XrMatrix4x4f ltw;
-//					constexpr XrVector3f sc{ 1.0f, 1.0f, 1.0f };
-//					XrMatrix4x4f_CreateTranslationRotationScale(&ltw, &spaceLocation.pose.position, &spaceLocation.pose.orientation, &sc);
-//
-//					mat4 mirror = mat4::GetIdentity();
-//					mirror.SetYAxis({ 0, -1, 0 });
-//
-//					mat4 m = mat4{ ltw.m } * mirror * middle;
-//					//mEyeGazePose.mTransformation = mat4::GetIdentity().RotAroundX(Radians(-90.0f)) * m ;
-//					mat4 tr = mat4::GetIdentity().RotAroundX(Radians(-90.0f)) * m;
-//
-//					// by quat
-//					// TODO: add mirror & rot -90 as with matrices
-//					const quat orientation = quat{ spaceLocation.pose.orientation.w, spaceLocation.pose.orientation.x, spaceLocation.pose.orientation.y, spaceLocation.pose.orientation.z };
-//					const vec3 position = vec3{ spaceLocation.pose.position.x, spaceLocation.pose.position.y, spaceLocation.pose.position.z };
-//					const quat f = cameraOrientation * orientation;
-//					const vec3 p = cameraOrientation * position + middlepw/*cameraPosition*/;
-//					mEyeGazePose.mRotation = f;
-//					mEyeGazePose.mPosition = p;
-//					mEyeGazePose.mTransformation = { mat3{mEyeGazePose.mRotation}, mEyeGazePose.mPosition };
-//
-//					mEyeGazePose.mRotationLocal = quat{ orientation.w, orientation.x, orientation.y, orientation.z };
-//					mEyeGazePose.mPositionLocal = vec3{ position.x, position.y, position.z };
-//					mEyeGazePose.mTransformationLocal = { mat3{mEyeGazePose.mRotationLocal}, mEyeGazePose.mPositionLocal };
-//
-//					mEyeGazePose.mTransformation = tr;
-//				}
-//			}
-//			else
-//			{
-//				// Tracking loss is expected when the hand is not active so only log a message if the eye tracking is active.
-//				if (g_input.eyeGazeActive == XR_TRUE)
-//				{
-//					TFE_DEBUG("VR", "Unable to locate eye gaze action space in app space: {}", res);
-//				}
-//			}
-//		}
-//
-//		return UpdateStatus::Ok;
-//	}
-//
-//	bool UpdateView(uint32_t viewIndex)
-//	{
-//		if (!mSessionRunning || !mFrameState.shouldRender)
-//		{
-//			return true;
-//		}
-//		//const bool useMultiView = UseMultiView();
-//		//const size_t bufferCount = useMultiView ? 1 : 2;
-//		//for (size_t eye = 0; eye < bufferCount; eye++)
-//		{
-//			// Each view has a separate swapchain which is acquired, rendered to, and released.
-//			XrSwapchain& swapchain = mSwapchains[viewIndex];
-//
-//			XrSwapchainImageAcquireInfo acquireInfo{ XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
-//			CHECK_XR_RESULT(xrAcquireSwapchainImage(swapchain, &acquireInfo, &mTextureSwapChainIndex));
-//
-//			XrSwapchainImageWaitInfo waitInfo{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
-//			waitInfo.timeout = XR_INFINITE_DURATION;
-//			CHECK_XR_RESULT(xrWaitSwapchainImage(swapchain, &waitInfo));
-//		}
-//
-//		return true;
-//	}
-//
-//	void Commit(int eye)
-//	{
-//		if (!mSessionRunning || !mFrameState.shouldRender)
-//		{
-//			return;
-//		}
-//
-//		XrSwapchainImageReleaseInfo releaseInfo{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
-//		CHECK_XR_RESULT(xrReleaseSwapchainImage(mSwapchains[eye], &releaseInfo));
-//	}
-//
-//	bool SubmitFrame()
-//	{
-//		if (!mSessionRunning)
-//		{
-//			return true;
-//		}
-//
-//		// Set-up the compositor layers for this frame.
-//		// NOTE: Multiple independent layers are allowed, but they need to be added
-//		// in a depth consistent order.
-//
-//		static std::vector<XrCompositionLayerBaseHeader*> layers;
-//		layers.clear();
-//
-//		if (mFrameState.shouldRender == XR_TRUE)
-//		{
-//			// passthrough layer is backmost layer (if available)
-//			if (mPassthroughLayer != XR_NULL_HANDLE)
-//			{
-//				static XrCompositionLayerPassthroughFB compositionPassthroughLayer{ XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB };
-//				compositionPassthroughLayer.flags = 0;//XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-//				compositionPassthroughLayer.layerHandle = mPassthroughLayer;
-//				layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&compositionPassthroughLayer));
-//			}
-//
-//			static XrCompositionLayerProjection projectionLayer{ XR_TYPE_COMPOSITION_LAYER_PROJECTION };
-//			projectionLayer.space = mAppSpace;
-//			projectionLayer.viewCount = (uint32_t)mProjectionLayerViews.size();
-//			projectionLayer.views = mProjectionLayerViews.data();
-//			projectionLayer.layerFlags = layers.empty() ? 0 : XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT | XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-//			layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&projectionLayer));
-//		}
-//		else
-//		{
-//			//TFE_DEBUG("VR", "mFrameState.shouldRender==FALSE in OpenXR::SubmitFrame()");
-//		}
-//
-//		XrFrameEndInfo frameEndInfo{ XR_TYPE_FRAME_END_INFO };
-//		frameEndInfo.displayTime = mFrameState.predictedDisplayTime;
-//#if defined(AE_DEVICE_ML2)
-//		frameEndInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
-//#else
-//		frameEndInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-//#endif
-//		frameEndInfo.layerCount = (uint32_t)layers.size();
-//		frameEndInfo.layers = layers.data();
-//		CHECK_XR_RESULT(xrEndFrame(mSession, &frameEndInfo));
-//
-//		return true;
-//	}
-//
-//	RenderTarget* GetCurrentTarget(int eye)
-//	{
-//		if (!CreateTextureSwapChain(mTargetSize))
+//		if (!CreateSwapChain(mTargetSize))
 //		{
 //			return nullptr;
 //		}
 //		return mRenderTargets[eye][mTextureSwapChainIndex].get();
 //	}
 //
-//	const Mat4& GetEyeProj(int eye) const
-//	{
-//		return mProj[eye];
-//	}
-//
-//	const Mat4& GetEyeLtw(int eye) const
-//	{
-//		return mEyePose[eye].mTransformation;
-//	}
-//
-//	const Pose& GetEyePose(int eye) const
-//	{
-//		return mEyePose[eye];
-//	}
-//
-//	const Pose& GetHandPose(int hand) const
-//	{
-//		//if (hand == 1)
-//		//	return mEyeGazePose;
-//		 
-//		//static Pose pose;
-//		//return pose;
-//		return mHandPose[hand];
-//	}
-//
-//	void ApplyHapticFeedback(int hand, const HapticVibration& vibration)
-//	{
-//		hand = std::clamp(hand, 0, 1);
-//		XrHapticVibration hapticVibration{ XR_TYPE_HAPTIC_VIBRATION };
-//		hapticVibration.amplitude = std::clamp(vibration.mAmplitude, 0.0f, 1.0f);
-//		const double durationInNs = (double)vibration.mDuration * 1000000000.0; // seconds to nanoseconds
-//		hapticVibration.duration = vibration.mDuration < 0.0f ? XR_MIN_HAPTIC_DURATION : (int64_t)durationInNs;
-//		hapticVibration.frequency = vibration.mFrequency <= 0.0f ? XR_FREQUENCY_UNSPECIFIED : vibration.mFrequency;
-//
-//		XrHapticActionInfo hapticActionInfo{ XR_TYPE_HAPTIC_ACTION_INFO };
-//		hapticActionInfo.action = g_input.vibrateAction;
-//		hapticActionInfo.subactionPath = g_input.handSubactionPath[hand];
-//		CHECK_XR_RESULT(xrApplyHapticFeedback(mSession, &hapticActionInfo, (XrHapticBaseHeader*)&hapticVibration));
-//	}
-//
-//	const ControllerState& GetControllerState(int hand) const
-//	{
-//		return mControllerState[hand];
-//	}
-//
-//	const Pose& GetEyeGazePose() const
-//	{
-//		return mEyeGazePose;
-//	}
-//
-//	void StartPassthrough()
-//	{
-//		if (mPassthroughLayer != XR_NULL_HANDLE || !mPassthroughSupported)
-//		{
-//			return; // already started or not supported
-//		}
-//
-//		CHECK_XR_RESULT2(xrPassthroughStartFB(mPassthrough));
-//
-//		XrPassthroughLayerCreateInfoFB passthroughLayerConfig{ XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB };
-//		passthroughLayerConfig.passthrough = mPassthrough;
-//		passthroughLayerConfig.flags = XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB; // TODO: calls xrPassthroughLayerResumeFB?
-//		passthroughLayerConfig.purpose = XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB;
-//		CHECK_XR_RESULT2(xrCreatePassthroughLayerFB(mSession, &passthroughLayerConfig, &mPassthroughLayer));
-//		//CHECK_XR_RESULT2(xrPassthroughLayerResumeFB(mPassthroughLayer));
-//
-//		mOnPassthrough.emit(this, true);
-//	}
+	const Mat4& GetEyeProj(Side eye)
+	{
+		return mProjection[eye];
+	}
+
+	//const Mat4& GetEyeLtw(Side eye)
+	//{
+	//	//return mEyePose[eye].mTransformation;
+	//	return mEyeLtw[eye];
+	//}
+
+	const Pose& GetEyePose(Side eye)
+	{
+		return mEyePose[eye];
+	}
+
+	//const Pose& GetHandPose(Side hand)
+	//{
+	//	//if (hand == 1)
+	//	//	return mEyeGazePose;
+	//	 
+	//	//static Pose pose;
+	//	//return pose;
+	//	return mHandPose[hand];
+	//}
+
+	void ApplyHapticFeedback(Side hand, const HapticVibration& vibration)
+	{
+		hand = std::clamp(hand, Side::Left, Side::Right);
+		XrHapticVibration hapticVibration{ XR_TYPE_HAPTIC_VIBRATION };
+		hapticVibration.amplitude = std::clamp(vibration.mAmplitude, 0.0f, 1.0f);
+		const double durationInNs = (double)vibration.mDuration * 1000000000.0; // seconds to nanoseconds
+		hapticVibration.duration = vibration.mDuration < 0.0f ? XR_MIN_HAPTIC_DURATION : (int64_t)durationInNs;
+		hapticVibration.frequency = vibration.mFrequency <= 0.0f ? XR_FREQUENCY_UNSPECIFIED : vibration.mFrequency;
+
+		XrHapticActionInfo hapticActionInfo{ XR_TYPE_HAPTIC_ACTION_INFO };
+		hapticActionInfo.action = g_input.vibrateAction;
+		hapticActionInfo.subactionPath = g_input.handSubactionPath[hand];
+		CHECK_XR_RESULT(xrApplyHapticFeedback(mSession, &hapticActionInfo, (XrHapticBaseHeader*)&hapticVibration));
+	}
+
+	const ControllerState& GetControllerState(Side hand)
+	{
+		return mControllerState[hand];
+	}
+
+	const Pose& GetEyeGazePose()
+	{
+		return mEyeGazePose;
+	}
+
+	void StartPassthrough()
+	{
+		if (mPassthroughLayer != XR_NULL_HANDLE || !mPassthroughSupported)
+		{
+			return; // already started or not supported
+		}
+
+		CHECK_XR_RESULT2(xrPassthroughStartFB(mPassthrough));
+
+		XrPassthroughLayerCreateInfoFB passthroughLayerConfig{ XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB };
+		passthroughLayerConfig.passthrough = mPassthrough;
+		passthroughLayerConfig.flags = XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB; // TODO: calls xrPassthroughLayerResumeFB?
+		passthroughLayerConfig.purpose = XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB;
+		CHECK_XR_RESULT2(xrCreatePassthroughLayerFB(mSession, &passthroughLayerConfig, &mPassthroughLayer));
+		//CHECK_XR_RESULT2(xrPassthroughLayerResumeFB(mPassthroughLayer));
+
+		//mOnPassthrough.emit(this, true);
+	}
 
 	void StopPassthrough()
 	{
@@ -2032,23 +1854,23 @@ namespace openxr
 	{
 		return mPassthroughLayer != XR_NULL_HANDLE;
 	}
-} // openxr
-}
+//}
 
-using namespace openxr;
-
-namespace vr
-{
+//namespace vr
+//{
 	bool Initialize(vr::Gfx gfx)
 	{
 		mGfx = gfx;
+
+		//using namespace openxr;
 
 		if (PrepareXrInstance()
 			&& PrepareXrSystem()
 			&& PrepareXrSession()
 			&& PrepareXrViewConfigViews()
 			&& PrepareXrReferenceSpaces()
-			&& PrepareXrActions())
+			&& PrepareXrActions()
+			&& CreateSwapChain(mTargetSize))
 		{
 			mInitialized = true;
 		}
@@ -2063,7 +1885,7 @@ namespace vr
 
 	void Deinitialize()
 	{
-		::openxr::DestroySwapChain();
+		DestroySwapChain();
 
 		StopPassthrough();
 
@@ -2091,5 +1913,293 @@ namespace vr
 		{
 			CHECK_XR_RESULT(xrDestroyInstance(mInstance));
 		}
+
+		mInitialized = false;
+	}
+
+	void ClearRenderTarget(Side eye)
+	{
+		glBindFramebuffer(GL_FRAMEBUFFER, mRenderTargets[eye][mTextureSwapChainIndex]);
+		glViewport(0, 0, mTargetSize.x, mTargetSize.y);
+		glDepthRange(0.0f, 1.0f);
+		TFE_ASSERT_GL;
+
+		const GLbitfield clearFlags = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
+		TFE_RenderState::setStateEnable(true, STATE_DEPTH_WRITE | STATE_STENCIL_WRITE);
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		glClearDepth(1.0f);
+		glClearStencil(0);
+		TFE_ASSERT_GL;
+
+		glClear(clearFlags);
+		TFE_ASSERT_GL;
+	}
+
+	UpdateStatus UpdateFrame(const Mat3& cameraRotOrig, const Vec3f& cameraPosOrig, const Mat4& projOrig, float userScale)
+	{
+		//if (!CreateSwapChain(mTargetSize))
+		//{
+		//	return UpdateStatus::ShouldQuit;
+		//}
+
+		//const glm::mat4 proj = glm::make_mat4(projOrig.data);
+		//const glm::mat3 cameraRot = glm::make_mat3(cameraRotOrig.data);
+		//glm::mat4 cameraLtw(cameraRot);
+		//cameraLtw[3] = glm::vec4(cameraPosOrig.x, cameraPosOrig.y, cameraPosOrig.z, 1.0f);
+		const XrMatrix4x4f cameraLtw = XrMatrix4x4f_CreateFromTFE(cameraRotOrig, cameraPosOrig);
+		//const XrMatrix4x4f projection = XrMatrix4x4f_CreateFromTFE(projOrig);
+		//XrMatrix4x4f projection;
+		//XrMatrix4x4f_Transpose(&projection, &projection_);
+
+		// TODO: extract from projOrig, looks like projOrig is transposed
+		const float cameraNear = 0.01f;
+		const float cameraFar = 4096.0f;
+
+		//Mat4 computeProjMatrixExplicit(f32 xScale, f32 yScale, f32 zNear, f32 zFar)
+		//{
+		//	// Build a projection matrix.
+		//	const f32 zScale = zFar / (zNear - zFar);
+		//	const f32 wScale = zNear * zFar / (zNear - zFar);
+
+		//	Mat4 r;
+		//	r.m0 = { xScale, 0.0f, 0.0f, 0.0f };
+		//	r.m1 = { 0.0f, yScale, 0.0f, 0.0f };
+		//	r.m2 = { 0.0f, 0.0f, zScale, wScale };
+		//	r.m3 = { 0.0f, 0.0f,  -1.0f, 0.0f };
+
+		//	return r;
+		//}
+
+		//Frustum::Frustum(const Mat4f & proj)
+		//{
+		//	const float a = proj[0][0];
+		//	const float b = proj[1][1];
+		//	const float c = proj[2][2];
+		//	const float d = proj[3][2];
+
+		//	mAspectRatio = b / a;
+		//	mNearPlane = d / (c - 1.0f);
+		//	mFarPlane = d / (c + 1.0f);
+		//	mFovY = Degrees(2.0f * std::atan(1.0f / b));
+		//}
+		//const float c = projection.m[2 * 4 + 2];
+		//const float d = projection.m[3 * 4 + 2];
+
+		//const float near_ = d / (c - 1.0f);
+		//const float far_ = d / (c + 1.0f);
+
+		mUserScale = userScale;
+
+		PollXrEvents();
+		if (mExitRenderLoop)
+		{
+			return UpdateStatus::ShouldQuit;
+		}
+
+		if (mSessionRunning)
+		{
+			PollXrActions();
+		}
+		else
+		{
+			TFE_INFO("VR", "UpdateStatus::NotVisible because !mSessionRunning");
+			return UpdateStatus::NotVisible;
+		}
+
+		XrFrameWaitInfo frameWaitInfo{ XR_TYPE_FRAME_WAIT_INFO };
+		CHECK_XR_RESULT(xrWaitFrame(mSession, &frameWaitInfo, &mFrameState));
+
+		XrFrameBeginInfo frameBeginInfo{ XR_TYPE_FRAME_BEGIN_INFO };
+		CHECK_XR_RESULT(xrBeginFrame(mSession, &frameBeginInfo));
+
+		if (mFrameState.shouldRender != XR_TRUE)
+		{
+			TFE_INFO("VR", "UpdateStatus::ShouldNotRender because mFrameState.shouldRender != XR_TRUE");
+			return UpdateStatus::ShouldNotRender;
+		}
+
+		XrViewState viewState{ XR_TYPE_VIEW_STATE };
+		uint32_t viewCapacityInput = (uint32_t)mViewConfigViews.size();
+		uint32_t viewCountOutput;
+
+		XrViewLocateInfo viewLocateInfo{ XR_TYPE_VIEW_LOCATE_INFO };
+		viewLocateInfo.viewConfigurationType = viewConfigType;
+		viewLocateInfo.displayTime = mFrameState.predictedDisplayTime;
+		viewLocateInfo.space = mAppSpace;
+
+		static std::vector<XrView> views(viewCapacityInput, { XR_TYPE_VIEW });
+
+		CHECK_XR_RESULT(xrLocateViews(mSession, &viewLocateInfo, &viewState, viewCapacityInput, &viewCountOutput, views.data()));
+		if ((viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) == 0 ||
+			(viewState.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) == 0)
+		{
+			TFE_INFO("VR", "UpdateStatus::NotVisible because no valid tracking poses");
+			return UpdateStatus::NotVisible; // There is no valid tracking poses for the views.
+		}
+
+		TFE_ASSERT(viewCountOutput == viewCapacityInput);
+		TFE_ASSERT(viewCountOutput == mViewConfigViews.size());
+
+		mProjectionLayerViews.resize(viewCountOutput);
+
+		////const Mat4 cameraLtw{ camera.GetTransformation().BuildMatrix() };
+		//XrVector3f cameraPosition;
+		//XrMatrix4x4f_GetTranslation(&cameraPosition, &cameraLtw);
+		const XrVector3f scaleVec{ 1.0f, 1.0f, 1.0f };
+		////const glm::quat cameraOrientation{ cameraLtw };
+
+		const bool useMultiview = UseMultiView();
+
+		// headset/eyes
+		{
+			for (size_t viewIndex = 0; viewIndex < Side::Count; viewIndex++)
+			{
+				XrCompositionLayerProjectionView& layerView = mProjectionLayerViews[viewIndex];
+				layerView = { XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW };
+				layerView.pose = views[viewIndex].pose;
+				layerView.fov = views[viewIndex].fov;
+				layerView.subImage.swapchain = useMultiview ? mSwapchains[0] : mSwapchains[viewIndex];
+				layerView.subImage.imageRect.offset = { 0, 0 };
+				layerView.subImage.imageRect.extent = { (int32_t)mTargetSize.x, (int32_t)mTargetSize.y };
+				layerView.subImage.imageArrayIndex = useMultiview ? (uint32_t)viewIndex : 0;
+
+				const auto& pose = layerView.pose;
+				XrMatrix4x4f proj;
+				XrMatrix4x4f_CreateProjectionFov(&proj, /*TODO*/GRAPHICS_OPENGL, layerView.fov, cameraNear, cameraFar);
+				mProjection[viewIndex] = Mat4_CreateFromXr(proj);// glm::make_mat4(proj.m);
+
+				// by matrix
+				XrMatrix4x4f toView;
+				XrMatrix4x4f_CreateTranslationRotationScale(&toView, &pose.position, &pose.orientation, &scaleVec);
+				//XrMatrix4x4f view;
+				//XrMatrix4x4f_InvertRigidBody(&view, &toView);
+				XrMatrix4x4f eyeLtwXr;
+				XrMatrix4x4f_Multiply(&eyeLtwXr, &toView, &cameraLtw);
+				mEyePose[viewIndex].mTransformation = Mat4_CreateFromXr(eyeLtwXr);
+
+				//// by quat
+				//const quat orientation = quat{ layerView.pose.orientation.w, layerView.pose.orientation.x, layerView.pose.orientation.y, layerView.pose.orientation.z };
+				//const vec3 position = vec3{ layerView.pose.position.x, layerView.pose.position.y, layerView.pose.position.z };
+				////const quat f = cameraOrientation * orientation;
+				////const vec3 p = mUserScale * (cameraOrientation * position) + cameraPosition;
+				////mEyePose[viewIndex].mRotation = f;
+				////mEyePose[viewIndex].mPosition = p;
+				////mEyePose[viewIndex].mTransformation = { mat3{mEyePose[viewIndex].mRotation}, mEyePose[viewIndex].mPosition };
+
+				//mEyePose[viewIndex].mRotationLocal = orientation;
+				//mEyePose[viewIndex].mPositionLocal = position;
+				//mEyePose[viewIndex].mTransformationLocal = { mat3{mEyePose[viewIndex].mRotationLocal}, mEyePose[viewIndex].mPositionLocal };
+			}
+
+			//// world transformation & user scale
+			//{
+			//	for (size_t viewIndex = 0; viewIndex < Side::Count; viewIndex++)
+			//	{
+			//		const quat& orientation = mEyePose[viewIndex].mRotationLocal;
+			//		const vec3& position = mEyePose[viewIndex].mPositionLocal;
+
+			//		const quat f = cameraOrientation * orientation;
+			//		const vec3 p = cameraOrientation * (mUserScale * position) + cameraPosition;
+			//		mEyePose[viewIndex].mRotation = f;
+			//		mEyePose[viewIndex].mPosition = p;
+			//		mEyePose[viewIndex].mTransformation = { mat3{mEyePose[viewIndex].mRotation}, mEyePose[viewIndex].mPosition };
+			//	}
+			//}
+		}
+
+		// For each locatable space that we want to visualize, render a 25cm cube.
+		//std::vector<Space> spaces;
+
+		//for (XrSpace visualizedSpace : g_visualizedSpaces)
+		//{
+		//	XrSpaceLocation spaceLocation{ XR_TYPE_SPACE_LOCATION };
+		//	XrResult res = xrLocateSpace(visualizedSpace, g_appSpace, frameState.predictedDisplayTime, &spaceLocation);
+		//	if (XR_UNQUALIFIED_SUCCESS(res))
+		//	{
+		//		if ((spaceLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 &&
+		//			(spaceLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0)
+		//		{
+		//			spaces.push_back(Space{ spaceLocation.pose, {0.25f, 0.25f, 0.25f}, g_spaceNames[visualizedSpace] });
+		//		}
+		//	}
+		//	else
+		//	{
+		//		// Tracking loss is expected when the hand is not active so only log a message
+		//		// if the hand is active.
+		//		//if (g_input.handActive[hand] == XR_TRUE) // TODO:
+		//		{
+		//			TFE_INFO("VR", "Unable to locate a visualized reference space in app space: {}", res);
+		//		}
+		//	}
+		//}
+
+		//// controllers
+		//{
+		//	//// Render a 10cm cube scaled by grabAction for each hand. Note renderHand will only be
+		//	//// true when the application has focus.
+		//	///// @todo Remove these if you do not want to draw things in hand space.
+		//	const char* handName[] = { "left", "right" };
+		//	for (auto hand : { Side::Left, Side::Right })
+		//	{
+		//		XrSpaceLocation spaceLocation{ XR_TYPE_SPACE_LOCATION };
+		//		XrResult res = xrLocateSpace(g_input.handSpace[hand], mAppSpace, mFrameState.predictedDisplayTime, &spaceLocation);
+		//		CHECK_XR_RESULT(res);
+		//		if (XR_UNQUALIFIED_SUCCESS(res))
+		//		{
+		//			if ((spaceLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 &&
+		//				(spaceLocation.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0)
+		//			{
+		//				//float scale = 0.1f * g_input.handScale[hand];
+		//				//std::string name = handName[hand]; name += "Hand";
+		//				//spaces.push_back(Space{ spaceLocation.pose, {scale, scale, scale},name });
+
+		//				// by matrix
+		//				//XrMatrix4x4f ltw;
+		//				//constexpr XrVector3f sc{ 1.0f, 1.0f, 1.0f };
+		//				//XrMatrix4x4f_CreateTranslationRotationScale(&ltw, &spaceLocation.pose.position, &spaceLocation.pose.orientation, &sc);
+		//				//const mat4 m = mat4{ ltw.m } * cameraLtw;
+		//				//mHandPose[hand].mTransformation = m;
+
+		//				// by quat
+		//				const quat orientation = quat{ spaceLocation.pose.orientation.w, spaceLocation.pose.orientation.x, spaceLocation.pose.orientation.y, spaceLocation.pose.orientation.z };
+		//				const vec3 position = vec3{ spaceLocation.pose.position.x, spaceLocation.pose.position.y, spaceLocation.pose.position.z };
+		//				//const quat f = cameraOrientation * orientation;
+		//				//const vec3 p = (cameraOrientation * position) + cameraPosition;
+		//				//mHandPose[hand].mRotation = f;
+		//				//mHandPose[hand].mPosition = p;
+		//				//mHandPose[hand].mTransformation = { mat3{mHandPose[hand].mRotation}, mHandPose[hand].mPosition };
+
+		//				mHandPose[hand].mRotationLocal = orientation * quat::FromAngleAndAxis(Radians(-90.0f), vec3{ 1, 0, 0 }); // make forward from -y to -z
+		//				mHandPose[hand].mPositionLocal = position;
+		//				mHandPose[hand].mTransformationLocal = { mat3{mHandPose[hand].mRotationLocal}, mHandPose[hand].mPositionLocal };
+		//			}
+		//		}
+		//		else
+		//		{
+		//			// Tracking loss is expected when the hand is not active so only log a message if the hand is active.
+		//			if (g_input.handActive[hand] == XR_TRUE)
+		//			{
+		//				TFE_DEBUG("VR", "Unable to locate {} hand action space in app space: {}", handName[hand], res);
+		//			}
+		//		}
+		//	}
+
+		//	// world transformation & user scale
+		//	{
+		//		for (size_t viewIndex = 0; viewIndex < Side::Count; viewIndex++)
+		//		{
+		//			const quat& orientation = mHandPose[viewIndex].mRotationLocal;
+		//			const vec3& position = mHandPose[viewIndex].mPositionLocal;
+
+		//			const quat f = cameraOrientation * orientation;
+		//			const vec3 p = cameraOrientation * (mUserScale * position) + cameraPosition;
+		//			mHandPose[viewIndex].mRotation = f;
+		//			mHandPose[viewIndex].mPosition = p;
+		//			mHandPose[viewIndex].mTransformation = { mat3{mHandPose[viewIndex].mRotation}, mHandPose[viewIndex].mPosition };
+		//		}
+		//	}
+		//}
+
+		return UpdateStatus::Ok;
 	}
 } // vr

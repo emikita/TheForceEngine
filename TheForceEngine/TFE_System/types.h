@@ -62,7 +62,7 @@ struct Vec2ui
 {
 	union
 	{
-		struct { u32 x, z; };
+		struct { u32 x, y; };
 		u32 m[2];
 	};
 };

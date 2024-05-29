@@ -1007,5 +1007,9 @@ void parseOption(const char* name, const std::vector<const char*>& values, bool 
 		{
 			TFE_Settings::getTempSettings()->vr = true;
 		}
+		else if (strcasecmp(name, "vrMultiview") == 0)
+		{
+			TFE_Settings::getTempSettings()->vrMultiview = true;
+		}
 	}
 }

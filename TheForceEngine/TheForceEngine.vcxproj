@@ -337,6 +337,7 @@ echo ^)";
     <ClInclude Include="Shaders\grid.h" />
     <ClInclude Include="Shaders\lighting.h" />
     <ClInclude Include="Shaders\textureSampleFunc.h" />
+    <ClInclude Include="Shaders\vr.h" />
     <ClInclude Include="TFE_A11y\accessibility.h" />
     <ClInclude Include="TFE_A11y\filePathList.h" />
     <ClInclude Include="TFE_Archive\archive.h" />
@@ -666,6 +667,7 @@ echo ^)";
     <ClInclude Include="TFE_RenderBackend\vertexBuffer.h" />
     <ClInclude Include="TFE_RenderBackend\Win32OpenGL\glslParser.h" />
     <ClInclude Include="TFE_RenderBackend\Win32OpenGL\openGL_Caps.h" />
+    <ClInclude Include="TFE_RenderBackend\Win32OpenGL\openGL_Debug.h" />
     <ClInclude Include="TFE_RenderBackend\Win32OpenGL\renderTarget.h" />
     <ClInclude Include="TFE_RenderBackend\Win32OpenGL\screenCapture.h" />
     <ClInclude Include="TFE_RenderShared\camera3d.h" />
@@ -711,7 +713,6 @@ echo ^)";
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="version.h" />
-    <ClInclude Include="VR\OpenGLDebug.h" />
     <ClInclude Include="VR\VR.h" />
     <ClInclude Include="VR\OpenXRDebug.h" />
   </ItemGroup>
@@ -999,6 +1000,7 @@ echo ^)";
     <ClCompile Include="TFE_RenderBackend\Win32OpenGL\glslParser.cpp" />
     <ClCompile Include="TFE_RenderBackend\Win32OpenGL\indexBuffer.cpp" />
     <ClCompile Include="TFE_RenderBackend\Win32OpenGL\openGL_Caps.cpp" />
+    <ClCompile Include="TFE_RenderBackend\Win32OpenGL\openGL_Debug.cpp" />
     <ClCompile Include="TFE_RenderBackend\Win32OpenGL\renderBackend.cpp" />
     <ClCompile Include="TFE_RenderBackend\Win32OpenGL\renderState.cpp" />
     <ClCompile Include="TFE_RenderBackend\Win32OpenGL\renderTarget.cpp" />
@@ -1038,7 +1040,6 @@ echo ^)";
     <ClCompile Include="TFE_Ui\ui.cpp" />
     <ClCompile Include="glew\src\glew.c" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="VR\OpenGLDebug.cpp" />
     <ClCompile Include="VR\OpenXR.cpp" />
     <ClCompile Include="VR\OpenXRDebug.cpp" />
   </ItemGroup>

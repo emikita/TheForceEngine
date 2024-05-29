@@ -41,6 +41,7 @@ struct TFE_Settings_Temp
 	bool skipLoadDelay = false;
 	bool forceFullscreen = false;
 	bool vr = false;
+	bool vrMultiview = false;
 };
 
 struct TFE_Settings_Window
