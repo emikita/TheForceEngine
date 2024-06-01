@@ -42,7 +42,8 @@ namespace OpenGL_Debug
 
 	const char* GetConstStr(GLenum constant)
 	{
-#define DOCASE(c) case c: return #c
+#define DOCASE(v) case v: return #v
+
 		switch (constant)
 		{
 			DOCASE(GL_NONE);
@@ -180,5 +181,99 @@ namespace OpenGL_Debug
 	{
 		glPopDebugGroup();
 		TFE_ASSERT_GL;
+	}
+
+	const char* DebugMsgSourceToString(GLenum source)
+	{
+#define DOCASE(v) case v: return #v
+		switch (source)
+		{
+			DOCASE(GL_DEBUG_SOURCE_API);
+			DOCASE(GL_DEBUG_SOURCE_WINDOW_SYSTEM);
+			DOCASE(GL_DEBUG_SOURCE_SHADER_COMPILER);
+			DOCASE(GL_DEBUG_SOURCE_THIRD_PARTY);
+			DOCASE(GL_DEBUG_SOURCE_APPLICATION);
+			DOCASE(GL_DEBUG_SOURCE_OTHER);
+		default:
+			TFE_ERROR("OpenGL", "Unknown debug message source {}", source);
+			return "";
+		};
+#undef DOCASE
+	}
+
+	const char* DebugMsgTypeToString(GLenum type)
+	{
+#define DOCASE(v) case v: return #v
+		switch (type)
+		{
+			DOCASE(GL_DEBUG_TYPE_ERROR);
+			DOCASE(GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR);
+			DOCASE(GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR);
+			DOCASE(GL_DEBUG_TYPE_PORTABILITY);
+			DOCASE(GL_DEBUG_TYPE_PERFORMANCE);
+			DOCASE(GL_DEBUG_TYPE_MARKER);
+			DOCASE(GL_DEBUG_TYPE_PUSH_GROUP);
+			DOCASE(GL_DEBUG_TYPE_POP_GROUP);
+			DOCASE(GL_DEBUG_TYPE_OTHER);
+		default:
+			TFE_ERROR("OpenGL", "Unknown debug message type {}", type);
+			return "";
+		};
+#undef DOCASE
+	}
+
+	const char* DebugMsgSeverityToString(GLenum severity)
+	{
+#define DOCASE(v) case v: return #v
+		switch (severity)
+		{
+			DOCASE(GL_DEBUG_SEVERITY_HIGH);
+			DOCASE(GL_DEBUG_SEVERITY_MEDIUM);
+			DOCASE(GL_DEBUG_SEVERITY_LOW);
+			DOCASE(GL_DEBUG_SEVERITY_NOTIFICATION);
+		default:
+			TFE_ERROR("OpenGL", "Unknown debug message severity {}", severity);
+			return "";
+		};
+#undef DOCASE
+	}
+
+	void DebugCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* userParam)
+	{
+		switch (severity)
+		{
+		case GL_DEBUG_SEVERITY_HIGH:
+			TFE_ERROR("OpenGL", "(source = {}, type = {}, id = {}, severity = {}) : '{}'", DebugMsgSourceToString(source), DebugMsgTypeToString(type), id, DebugMsgSeverityToString(severity), message);
+			break;
+		case GL_DEBUG_SEVERITY_MEDIUM:
+			TFE_WARN("OpenGL", "(source={}, type={}, id={}, severity={}): '{}'", userParam, DebugMsgSourceToString(source), DebugMsgTypeToString(type), id, DebugMsgSeverityToString(severity), message);
+			break;
+		case GL_DEBUG_SEVERITY_LOW:
+		default:
+			TFE_INFO("OpenGL", "(source={}, type={}, id={}, severity={}): '{}'", userParam, DebugMsgSourceToString(source), DebugMsgTypeToString(type), id, DebugMsgSeverityToString(severity), message);
+			break;
+		};
+	}
+
+	void Initialize()
+	{
+#ifdef _DEBUG
+		if (glDebugMessageCallback)
+		{
+			glDebugMessageCallback(DebugCallback, nullptr);
+			TFE_ASSERT_GL;
+
+			glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_NOTIFICATION, 0, nullptr, GL_FALSE);
+			glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_LOW, 0, nullptr, GL_TRUE);
+			glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_MEDIUM, 0, nullptr, GL_TRUE);
+			glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_HIGH, 0, nullptr, GL_TRUE);
+			TFE_ASSERT_GL;
+
+			//glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_NOTIFICATION, 0, nullptr, GL_TRUE);
+			//TFE_ASSERT_GL;
+			//glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_LOW, 0, nullptr, GL_TRUE);
+			//TFE_ASSERT_GL;
+		}
+#endif
 	}
 }

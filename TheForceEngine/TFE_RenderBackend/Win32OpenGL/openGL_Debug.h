@@ -5,6 +5,8 @@
 
 namespace OpenGL_Debug
 {
+	void Initialize();
+
 	void AssertGL(const char* file, int line);
 	const char* GetConstStr(GLenum constant);
 	bool CheckRenderTargetStatus(GLuint target);

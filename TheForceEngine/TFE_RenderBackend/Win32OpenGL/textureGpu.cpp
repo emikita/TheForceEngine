@@ -1,4 +1,5 @@
 #include <TFE_RenderBackend/textureGpu.h>
+#include <TFE_RenderBackend/Win32OpenGL/openGL_Debug.h>
 #include <TFE_System/system.h>
 #include <TFE_Settings/settings.h>
 #include "openGL_Caps.h"
@@ -33,10 +34,8 @@ TextureGpu::~TextureGpu()
 	if (m_gpuHandle)
 	{
 		glDeleteTextures(1, &m_gpuHandle);
+		TFE_ASSERT_GL;
 		m_gpuHandle = 0;
-
-		// Catch GL errors up to this point.
-		glGetError();
 	}
 }
 
@@ -48,34 +47,27 @@ bool TextureGpu::create(u32 width, u32 height, TexFormat format, bool hasMipmaps
 	m_bytesPerChannel = c_bytesPerChannel[format];
 	m_layers = 1;
 
-	// Catch a case where a pre-existing error is causing failures.
-	GLenum error = glGetError();
-	assert(error == GL_NO_ERROR);
-	if (error != GL_NO_ERROR)
-	{
-		TFE_System::logWrite(LOG_WARNING, "TextureGPU - OpenGL", "Pre-existing OpenGL error: 0x%x when calling TextureGpu::create().", error);
-	}
-
 	glGenTextures(1, &m_gpuHandle);
 	if (!m_gpuHandle) { return false; }
 
 	glBindTexture(GL_TEXTURE_2D, m_gpuHandle);
 	glTexImage2D(GL_TEXTURE_2D, 0, c_internalFormat[format], width, height, 0, c_baseFormat[format], c_channelFormat[format], nullptr);
-	error = glGetError();
+	TFE_ASSERT_GL;
+	//error = glGetError();
 	// Handle OpenGL driver wonkiness around float16 textures.
-	if (error != GL_NO_ERROR && c_channelFormat[format] == GL_FLOAT)
-	{
-		glTexImage2D(GL_TEXTURE_2D, 0, c_internalFormat[format], width, height, 0, c_baseFormat[format], GL_HALF_FLOAT, nullptr);
-		error = glGetError();
-	}
-	assert(error == GL_NO_ERROR);
-	if (error != GL_NO_ERROR)
-	{
-		TFE_System::logWrite(LOG_ERROR, "TextureGPU - OpenGL", "Failed to create texture - size: (%u, %u), format: %s. Error ID: 0x%x",
-			m_width, m_height, c_texFormatStr[format], error);
-		glBindTexture(GL_TEXTURE_2D, 0);
-		return false;
-	}
+	//if (error != GL_NO_ERROR && c_channelFormat[format] == GL_FLOAT)
+	//{
+	//	glTexImage2D(GL_TEXTURE_2D, 0, c_internalFormat[format], width, height, 0, c_baseFormat[format], GL_HALF_FLOAT, nullptr);
+	//	error = glGetError();
+	//}
+	//assert(error == GL_NO_ERROR);
+	//if (error != GL_NO_ERROR)
+	//{
+	//	TFE_System::logWrite(LOG_ERROR, "TextureGPU - OpenGL", "Failed to create texture - size: (%u, %u), format: %s. Error ID: 0x%x",
+	//		m_width, m_height, c_texFormatStr[format], error);
+	//	glBindTexture(GL_TEXTURE_2D, 0);
+	//	return false;
+	//}
 
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, hasMipmaps ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magFilter == MAG_FILTER_LINEAR ? GL_LINEAR : GL_NEAREST);
@@ -83,6 +75,7 @@ bool TextureGpu::create(u32 width, u32 height, TexFormat format, bool hasMipmaps
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
 	glBindTexture(GL_TEXTURE_2D, 0);
+	TFE_ASSERT_GL;
 
 	return true;
 }
@@ -118,7 +111,7 @@ bool TextureGpu::createArray(u32 width, u32 height, u32 layers, u32 channels, u3
 		}
 		width  >>= 1;
 		height >>= 1;
-		assert(glGetError() == GL_NO_ERROR);
+		TFE_ASSERT_GL;
 	}
 
 	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -126,9 +119,10 @@ bool TextureGpu::createArray(u32 width, u32 height, u32 layers, u32 channels, u3
 	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+	TFE_ASSERT_GL;
 
 	glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-	assert(glGetError() == GL_NO_ERROR);
+	TFE_ASSERT_GL;
 	return true;
 }
 
@@ -145,6 +139,7 @@ bool TextureGpu::createWithData(u32 width, u32 height, const void* buffer, MagFi
 
 	glBindTexture(GL_TEXTURE_2D, m_gpuHandle);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
+	TFE_ASSERT_GL;
 	
 	f32 maxAniso = 1.0f;
 	glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &maxAniso);
@@ -153,9 +148,11 @@ bool TextureGpu::createWithData(u32 width, u32 height, const void* buffer, MagFi
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, maxAniso);
+	TFE_ASSERT_GL;
 
 	glGenerateMipmap(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, 0);
+	TFE_ASSERT_GL;
 
 	return true;
 }
@@ -183,7 +180,7 @@ bool TextureGpu::update(const void* buffer, size_t size, s32 layer, s32 mipLevel
 		glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 	}
 
-	assert(glGetError() == GL_NO_ERROR);
+	TFE_ASSERT_GL;
 	return true;
 }
 
@@ -200,6 +197,7 @@ void TextureGpu::setFilter(MagFilter magFilter, MinFilter minFilter, bool isArra
 		glTexParameteri(isArray ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, (s32)m_mipCount - 1);
 		glTexParameterf(isArray ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D, GL_TEXTURE_MAX_LOD, max(0.0f, (f32)m_mipCount - 1.0f - maxLodBias));
 		glTexParameterf(isArray ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, ani);
+		TFE_ASSERT_GL;
 	}
 	else
 	{
@@ -207,6 +205,7 @@ void TextureGpu::setFilter(MagFilter magFilter, MinFilter minFilter, bool isArra
 		glTexParameteri(isArray ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 		glTexParameterf(isArray ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D, GL_TEXTURE_MAX_LOD, 0.0f);
 		glTexParameterf(isArray ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, 1.0f);
+		TFE_ASSERT_GL;
 	}
 }
 
@@ -221,12 +220,14 @@ void TextureGpu::bind(u32 slot/* = 0*/) const
 	{
 		glBindTexture(GL_TEXTURE_2D_ARRAY, m_gpuHandle);
 	}
+	TFE_ASSERT_GL;
 }
 
 void TextureGpu::clear(u32 slot/* = 0*/)
 {
 	glActiveTexture(GL_TEXTURE0 + slot);
 	glBindTexture(GL_TEXTURE_2D, 0);
+	TFE_ASSERT_GL;
 }
 
 void TextureGpu::clearSlots(u32 count, u32 start/* = 0*/)
@@ -235,6 +236,7 @@ void TextureGpu::clearSlots(u32 count, u32 start/* = 0*/)
 	{
 		glActiveTexture(GL_TEXTURE0 + i + start);
 		glBindTexture(GL_TEXTURE_2D, 0);
+		TFE_ASSERT_GL;
 	}
 }
 
@@ -243,4 +245,5 @@ void TextureGpu::readCpu(u8* image)
 	glBindTexture(GL_TEXTURE_2D, m_gpuHandle);
 	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, image);
 	glBindTexture(GL_TEXTURE_2D, 0);
+	TFE_ASSERT_GL;
 }

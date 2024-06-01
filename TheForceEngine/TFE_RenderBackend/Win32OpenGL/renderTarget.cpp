@@ -1,6 +1,7 @@
 #include "renderTarget.h"
 #include <TFE_RenderBackend/renderState.h>
 #include <TFE_RenderBackend/renderBackend.h>
+#include <TFE_RenderBackend/Win32OpenGL/openGL_Debug.h>
 #include <GL/glew.h>
 #include <assert.h>
 
@@ -13,6 +14,7 @@ namespace
 		glBindRenderbuffer(GL_RENDERBUFFER, handle);
 		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
 		glBindRenderbuffer(GL_RENDERBUFFER, 0);
+		TFE_ASSERT_GL;
 
 		return handle;
 	}
@@ -21,6 +23,7 @@ namespace
 RenderTarget::~RenderTarget()
 {
 	glDeleteFramebuffers(1, &m_gpuHandle);
+	TFE_ASSERT_GL;
 	m_gpuHandle = 0;
 
 	if (m_depthBufferHandle)
@@ -70,6 +73,7 @@ bool RenderTarget::create(s32 textureCount, TextureGpu** textures, bool depthBuf
 	}
 
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	TFE_ASSERT_GL;
 	return true;
 }
 
@@ -78,6 +82,7 @@ void RenderTarget::bind()
 	glBindFramebuffer(GL_FRAMEBUFFER, m_gpuHandle);
 	glViewport(0, 0, m_texture[0]->getWidth(), m_texture[0]->getHeight());
 	glDepthRange(0.0f, 1.0f);
+	TFE_ASSERT_GL;
 }
 
 void RenderTarget::clear(const f32* color, f32 depth, u8 stencil, bool clearColor)
@@ -97,6 +102,7 @@ void RenderTarget::clear(const f32* color, f32 depth, u8 stencil, bool clearColo
 	}
 
 	glClear(clearFlags);
+	TFE_ASSERT_GL;
 }
 
  void RenderTarget::clearDepth(f32 depth)
@@ -106,6 +112,7 @@ void RenderTarget::clear(const f32* color, f32 depth, u8 stencil, bool clearColo
 		 TFE_RenderState::setStateEnable(true, STATE_DEPTH_WRITE);
 		 glClearDepth(depth);
 		 glClear(GL_DEPTH_BUFFER_BIT);
+		 TFE_ASSERT_GL;
 	 }
  }
 
@@ -116,12 +123,14 @@ void RenderTarget::clear(const f32* color, f32 depth, u8 stencil, bool clearColo
 		 TFE_RenderState::setStateEnable(true, STATE_STENCIL_WRITE);
 		 glClearStencil(stencil);
 		 glClear(GL_STENCIL_BUFFER_BIT);
+		 TFE_ASSERT_GL;
 	 }
  }
 
 void RenderTarget::unbind()
 {
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	TFE_ASSERT_GL;
 }
 
 void RenderTarget::copy(RenderTarget* dst, RenderTarget* src)
@@ -135,12 +144,14 @@ void RenderTarget::copy(RenderTarget* dst, RenderTarget* src)
 
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+	TFE_ASSERT_GL;
 }
 
 void RenderTarget::copyBackbufferToTarget(RenderTarget* dst)
 {
 	glReadBuffer(GL_BACK);
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst->m_gpuHandle);
+	TFE_ASSERT_GL;
 
 	DisplayInfo displayInfo;
 	TFE_RenderBackend::getDisplayInfo(&displayInfo);
@@ -150,4 +161,5 @@ void RenderTarget::copyBackbufferToTarget(RenderTarget* dst)
 		GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+	TFE_ASSERT_GL;
 }
